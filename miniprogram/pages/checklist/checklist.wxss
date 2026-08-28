@@ -1,0 +1,81 @@
+.empty {
+  padding: 160rpx 64rpx 0;
+  text-align: center;
+}
+
+.empty-mark {
+  font-size: 80rpx;
+  color: #C9D4CC;
+  margin-bottom: 24rpx;
+}
+
+.empty-title {
+  font-size: 36rpx;
+  font-weight: 600;
+  color: #33302B;
+}
+
+.empty-desc {
+  margin: 16rpx 0 48rpx;
+  color: #8A8378;
+  font-size: 28rpx;
+  line-height: 1.7;
+}
+
+/* ---------- 頭部摘要 ---------- */
+.head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.head-profile {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #33302B;
+}
+
+.head-edit {
+  color: #4C6A5A;
+  font-size: 26rpx;
+  padding: 6rpx 12rpx;
+}
+
+.head-progress {
+  margin-top: 12rpx;
+  color: #8A8378;
+  font-size: 26rpx;
+}
+
+.progress-track {
+  margin-top: 16rpx;
+  height: 12rpx;
+  background: #EFEAE1;
+  border-radius: 999rpx;
+  overflow: hidden;
+}
+
+.progress-inner {
+  height: 100%;
+  background: #4C6A5A;
+  border-radius: 999rpx;
+  transition: width 0.3s ease;
+}
+
+/* ---------- 底部分享 ---------- */
+.share-area {
+  margin-top: 40rpx;
+  padding-bottom: 8rpx;
+}
+
+.copy-btn,
+.share-btn {
+  margin-bottom: 20rpx;
+}
+
+.share-tip {
+  text-align: center;
+  color: #8A8378;
+  font-size: 24rpx;
+  padding: 0 48rpx;
+}

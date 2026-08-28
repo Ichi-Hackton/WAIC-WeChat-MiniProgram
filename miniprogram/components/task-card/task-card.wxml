@@ -1,0 +1,62 @@
+<view class="task {{done ? 'task-done' : ''}}">
+  <view class="task-row" bindtap="onToggleExpand">
+    <view class="checkbox {{done ? 'checked' : ''}}" catchtap="onToggleDone">
+      <text wx:if="{{done}}">✓</text>
+    </view>
+    <view class="task-main">
+      <view class="task-title">{{task.title}}</view>
+      <view class="task-tags">
+        <text class="tag tag-deadline" wx:if="{{task.deadline}}">有時限</text>
+        <text class="tag tag-fee" wx:if="{{task.fee}}">費用參考</text>
+        <text class="claim-inline" wx:if="{{claimer}}">{{claimer}} 認領中</text>
+      </view>
+    </view>
+    <text class="arrow {{expanded ? 'arrow-up' : ''}}">›</text>
+  </view>
+
+  <view class="task-body" wx:if="{{expanded}}">
+    <view class="body-row" wx:if="{{task.where}}">
+      <text class="body-label">去哪裡</text>
+      <view class="body-value">{{task.where}}</view>
+    </view>
+
+    <view class="body-row" wx:if="{{task.materials && task.materials.length > 0}}">
+      <text class="body-label">帶什麼</text>
+      <view class="body-value">
+        <text class="material" wx:for="{{task.materials}}" wx:key="*this">{{item}}</text>
+      </view>
+    </view>
+
+    <view class="body-row" wx:if="{{task.deadline}}">
+      <text class="body-label">時限</text>
+      <view class="body-value">{{task.deadline}}</view>
+    </view>
+
+    <view class="body-row" wx:if="{{task.fee}}">
+      <text class="body-label">費用</text>
+      <view class="body-value">{{task.fee}}（僅供參考）</view>
+    </view>
+
+    <view class="warn-box" wx:if="{{task.note}}">{{task.note}}</view>
+
+    <view class="claim-row">
+      <text class="body-label">認領人</text>
+      <view class="claim-value" wx:if="{{!editingClaim}}" bindtap="onEditClaim" hover-class="claim-hover">
+        {{claimer || '點擊填寫，由TA負責這件事'}}
+      </view>
+      <input
+        wx:else
+        class="claim-input"
+        value="{{claimInput}}"
+        focus="{{editingClaim}}"
+        placeholder="輸入家人姓名"
+        confirm-type="done"
+        bindinput="onClaimInput"
+        bindconfirm="onClaimConfirm"
+        bindblur="onClaimConfirm"
+      />
+    </view>
+
+    <button class="detail-btn" wx:if="{{task.detailId}}" size="mini" bindtap="onDetail">查看詳情</button>
+  </view>
+</view>

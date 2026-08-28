@@ -1,0 +1,66 @@
+.support {
+  background: #FBF4F4;
+  border: 2rpx solid #E7D3D3;
+  border-radius: 20rpx;
+  padding: 26rpx;
+  margin: 8rpx 24rpx 16rpx 104rpx;
+}
+
+.support-title {
+  color: #7C3A3A;
+  font-size: 30rpx;
+  font-weight: 600;
+  margin-bottom: 10rpx;
+}
+
+.support-tip {
+  color: #8C6363;
+  font-size: 26rpx;
+  line-height: 1.6;
+  margin-bottom: 18rpx;
+}
+
+.hotline {
+  display: flex;
+  align-items: center;
+  background: #FFFFFF;
+  border-radius: 14rpx;
+  padding: 18rpx 20rpx;
+  margin-bottom: 14rpx;
+}
+
+.hotline-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.hotline-label {
+  font-size: 26rpx;
+  color: #4A463F;
+}
+
+.hotline-number {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #7C3A3A;
+  margin-top: 4rpx;
+}
+
+.call-btn {
+  background: #7C3A3A;
+  color: #FFFFFF;
+  font-size: 26rpx;
+  border-radius: 12rpx;
+  padding: 0 30rpx;
+  line-height: 2.2;
+}
+
+.call-btn::after {
+  border: none;
+}
+
+.support-foot {
+  color: #8C6363;
+  font-size: 24rpx;
+  margin-top: 6rpx;
+}

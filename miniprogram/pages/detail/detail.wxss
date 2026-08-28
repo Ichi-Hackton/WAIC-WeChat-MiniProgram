@@ -1,0 +1,128 @@
+.loading {
+  padding: 160rpx 48rpx;
+  text-align: center;
+  color: #8A8378;
+  font-size: 28rpx;
+}
+
+.intro-title {
+  font-size: 38rpx;
+  font-weight: 600;
+  color: #33302B;
+}
+
+.intro-summary {
+  margin-top: 14rpx;
+  color: #4A463F;
+  font-size: 28rpx;
+  line-height: 1.7;
+}
+
+.body-card {
+  font-size: 28rpx;
+  color: #4A463F;
+  line-height: 1.7;
+}
+
+.material-item {
+  margin-bottom: 8rpx;
+}
+
+.copy-tip {
+  margin-top: 14rpx;
+  color: #8A8378;
+  font-size: 24rpx;
+}
+
+.warn-item {
+  margin-bottom: 14rpx;
+}
+
+.warn-item:last-child {
+  margin-bottom: 0;
+}
+
+.fee-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 10rpx 0;
+}
+
+.fee-name {
+  color: #4A463F;
+}
+
+.fee-range {
+  color: #4C6A5A;
+  font-weight: 500;
+}
+
+.faq {
+  margin-bottom: 18rpx;
+}
+
+.faq:last-child {
+  margin-bottom: 0;
+}
+
+.faq-q {
+  font-weight: 500;
+  color: #33302B;
+}
+
+.faq-a {
+  margin-top: 6rpx;
+  color: #4A463F;
+  font-size: 26rpx;
+  line-height: 1.7;
+}
+
+.contact-card {
+  display: flex;
+  align-items: center;
+}
+
+.contact-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.contact-label {
+  color: #8A8378;
+  font-size: 26rpx;
+}
+
+.contact-number {
+  font-size: 36rpx;
+  font-weight: 600;
+  color: #4C6A5A;
+  margin-top: 6rpx;
+}
+
+.call-btn {
+  background: #4C6A5A;
+  color: #FFFFFF;
+  font-size: 28rpx;
+  border-radius: 12rpx;
+  padding: 0 36rpx;
+  line-height: 2.4;
+}
+
+.call-btn::after {
+  border: none;
+}
+
+.add-btn {
+  margin-top: 40rpx;
+}
+
+.sources {
+  margin-top: 28rpx;
+  text-align: center;
+}
+
+.sources-line {
+  color: #B4ACA0;
+  font-size: 22rpx;
+  line-height: 1.8;
+}

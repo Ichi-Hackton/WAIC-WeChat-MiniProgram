@@ -1,0 +1,66 @@
+.hero {
+  padding: 72rpx 48rpx 40rpx;
+  text-align: center;
+}
+
+.hero-mark {
+  font-size: 64rpx;
+  margin-bottom: 16rpx;
+}
+
+.hero-title {
+  font-size: 44rpx;
+  font-weight: 600;
+  color: #33302B;
+  letter-spacing: 4rpx;
+}
+
+.hero-sub {
+  margin-top: 14rpx;
+  color: #7A736B;
+  font-size: 28rpx;
+}
+
+.hero-condo {
+  margin-top: 36rpx;
+  color: #4C6A5A;
+  font-size: 30rpx;
+  line-height: 1.7;
+}
+
+.primary-btn {
+  margin-top: 24rpx;
+}
+
+.entry-grid {
+  margin: 40rpx 32rpx 0;
+  background: #FFFFFF;
+  border-radius: 20rpx;
+  overflow: hidden;
+}
+
+.entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 34rpx 32rpx;
+  border-bottom: 2rpx solid #F4F0E9;
+}
+
+.entry:last-child {
+  border-bottom: none;
+}
+
+.entry-hover {
+  background: #F8F6F1;
+}
+
+.entry-name {
+  font-size: 32rpx;
+  color: #33302B;
+}
+
+.entry-desc {
+  font-size: 26rpx;
+  color: #8A8378;
+}

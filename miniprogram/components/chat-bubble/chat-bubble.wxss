@@ -1,0 +1,48 @@
+.bubble-row {
+  display: flex;
+  margin: 16rpx 24rpx;
+  align-items: flex-start;
+}
+
+.row-user {
+  justify-content: flex-end;
+}
+
+.avatar {
+  flex-shrink: 0;
+  width: 64rpx;
+  height: 64rpx;
+  border-radius: 50%;
+  background: #4C6A5A;
+  color: #FFFFFF;
+  font-size: 26rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 16rpx;
+}
+
+.bubble {
+  max-width: 76%;
+  border-radius: 20rpx;
+  padding: 22rpx 26rpx;
+  font-size: 30rpx;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.bubble-agent {
+  background: #FFFFFF;
+  color: #33302B;
+  box-shadow: 0 2rpx 10rpx rgba(51, 48, 43, 0.05);
+}
+
+.bubble-user {
+  background: #4C6A5A;
+  color: #FFFFFF;
+}
+
+.bubble-crisis {
+  background: #F9EFEF;
+  color: #7C3A3A;
+}

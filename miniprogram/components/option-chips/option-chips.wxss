@@ -1,0 +1,27 @@
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 8rpx 24rpx 16rpx;
+}
+
+.chips-disabled {
+  opacity: 0.5;
+}
+
+.chip {
+  background: #FFFFFF;
+  border: 2rpx solid #C9D4CC;
+  color: #3E584A;
+  border-radius: 999rpx;
+  padding: 16rpx 34rpx;
+  margin: 12rpx 12rpx 0 0;
+  font-size: 30rpx;
+  min-height: 64rpx;
+  line-height: 1.4;
+  box-sizing: border-box;
+}
+
+.chip-hover {
+  background: #EDF2EE;
+  border-color: #4C6A5A;
+}

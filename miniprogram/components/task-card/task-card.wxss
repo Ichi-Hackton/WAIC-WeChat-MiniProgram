@@ -1,0 +1,179 @@
+.task {
+  background: #FFFFFF;
+  border-radius: 20rpx;
+  padding: 24rpx;
+  margin: 0 32rpx 20rpx;
+  box-shadow: 0 4rpx 16rpx rgba(51, 48, 43, 0.04);
+}
+
+.task-done {
+  background: #F4F6F3;
+}
+
+.task-row {
+  display: flex;
+  align-items: flex-start;
+}
+
+.checkbox {
+  flex-shrink: 0;
+  width: 52rpx;
+  height: 52rpx;
+  border-radius: 50%;
+  border: 3rpx solid #C9D4CC;
+  margin-right: 20rpx;
+  margin-top: 4rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #FFFFFF;
+  font-size: 30rpx;
+}
+
+.checkbox.checked {
+  background: #4C6A5A;
+  border-color: #4C6A5A;
+}
+
+.task-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-title {
+  font-size: 32rpx;
+  font-weight: 500;
+  color: #33302B;
+  line-height: 1.5;
+}
+
+.task-done .task-title {
+  color: #7A8480;
+}
+
+.task-tags {
+  margin-top: 8rpx;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.tag {
+  border-radius: 8rpx;
+  padding: 2rpx 12rpx;
+  font-size: 22rpx;
+  margin-right: 12rpx;
+}
+
+.tag-deadline {
+  background: #F4EBE4;
+  color: #8F5B13;
+}
+
+.tag-fee {
+  background: #EEF2EE;
+  color: #4C6A5A;
+}
+
+.claim-inline {
+  font-size: 24rpx;
+  color: #8A8378;
+}
+
+.arrow {
+  flex-shrink: 0;
+  color: #B4ACA0;
+  font-size: 40rpx;
+  margin-left: 12rpx;
+  margin-top: 2rpx;
+  transition: transform 0.2s ease;
+  transform: rotate(90deg);
+}
+
+.arrow-up {
+  transform: rotate(-90deg);
+}
+
+/* ---------- 展開區 ---------- */
+.task-body {
+  margin-top: 20rpx;
+  padding-top: 20rpx;
+  border-top: 2rpx solid #F0EBE2;
+}
+
+.body-row {
+  display: flex;
+  margin-bottom: 14rpx;
+  align-items: flex-start;
+}
+
+.body-label {
+  flex-shrink: 0;
+  width: 128rpx;
+  color: #8A8378;
+  font-size: 26rpx;
+}
+
+.body-value {
+  flex: 1;
+  font-size: 28rpx;
+  color: #4A463F;
+  line-height: 1.6;
+}
+
+.material {
+  display: inline-block;
+  background: #F6F3EE;
+  border-radius: 8rpx;
+  padding: 4rpx 14rpx;
+  margin: 0 10rpx 10rpx 0;
+  font-size: 26rpx;
+  color: #4A463F;
+}
+
+.warn-box {
+  background: #FBF3E4;
+  border-radius: 12rpx;
+  padding: 16rpx 20rpx;
+  color: #8F5B13;
+  font-size: 26rpx;
+  line-height: 1.6;
+  margin: 8rpx 0 16rpx;
+}
+
+.claim-row {
+  display: flex;
+  align-items: center;
+  margin-top: 8rpx;
+}
+
+.claim-value {
+  flex: 1;
+  color: #4C6A5A;
+  font-size: 28rpx;
+  padding: 8rpx 0;
+}
+
+.claim-hover {
+  opacity: 0.7;
+}
+
+.claim-input {
+  flex: 1;
+  border-bottom: 2rpx solid #C9D4CC;
+  padding: 8rpx 4rpx;
+  font-size: 28rpx;
+}
+
+.detail-btn {
+  margin-top: 16rpx;
+  background: #EEF2EE;
+  color: #3E584A;
+  font-size: 26rpx;
+  border-radius: 12rpx;
+  line-height: 2.2;
+}
+
+.detail-btn::after {
+  border: none;
+}

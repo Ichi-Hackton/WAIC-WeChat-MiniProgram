@@ -1,0 +1,12 @@
+<view class="support">
+  <view class="support-title">您不需要一個人承受</view>
+  <view class="support-tip">以下熱線均為全天候服務，隨時可以撥打；也請聯繫一位家人或朋友，讓TA此刻陪在您身邊。</view>
+  <view class="hotline" wx:for="{{hotlines}}" wx:key="number">
+    <view class="hotline-info">
+      <view class="hotline-label">{{item.label}}</view>
+      <view class="hotline-number">{{item.number}}</view>
+    </view>
+    <button class="call-btn" size="mini" data-number="{{item.number}}" bindtap="onCall">撥打</button>
+  </view>
+  <view class="support-foot">流程可以隨時停下，也可以隨時繼續；您的狀態最重要。</view>
+</view>

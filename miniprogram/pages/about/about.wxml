@@ -1,0 +1,36 @@
+<view class="section-title">隱私承諾</view>
+<view class="card">
+  <view class="point" wx:for="{{privacyPoints}}" wx:key="*this">
+    <text class="point-dot">·</text>
+    <text class="point-text">{{item}}</text>
+  </view>
+</view>
+
+<view class="section-title">心理援助熱線</view>
+<view class="card">
+  <view class="hotline" wx:for="{{hotlines}}" wx:key="number">
+    <view class="hotline-info">
+      <view class="hotline-label">{{item.label}}</view>
+      <view class="hotline-number">{{item.number}}</view>
+    </view>
+    <button class="call-btn" size="mini" data-number="{{item.number}}" bindtap="onCall">撥打</button>
+  </view>
+  <view class="hotline-note">如果您正處在極度悲傷中，請隨時撥打；您不需要一個人承受。</view>
+</view>
+
+<view class="section-title">免責聲明</view>
+<view class="card">
+  <view class="disclaimer-text">{{disclaimer}}</view>
+  <view class="disclaimer-text">本應用不提供法律意見；涉法事項請諮詢專業律師。</view>
+</view>
+
+<view class="section-title">數據管理</view>
+<view class="card">
+  <view class="clear-desc">所有數據僅保存在您的手機本地。對話結束後，可隨時一鍵清除：</view>
+  <button class="clear-btn" bindtap="onClearData">一鍵清除全部數據</button>
+</view>
+
+<view class="version">
+  身後事導航助手 {{version}}
+  <view class="version-sub">角色定義與流程依據：Agent.md v1.0（2026-08-27）</view>
+</view>

@@ -1,0 +1,6 @@
+<view class="bubble-row {{role === 'user' ? 'row-user' : 'row-agent'}}">
+  <view class="avatar" wx:if="{{role === 'agent'}}">伴</view>
+  <view class="bubble {{role === 'user' ? 'bubble-user' : 'bubble-agent'}} {{kind === 'crisis' ? 'bubble-crisis' : ''}}">
+    <text user-select="{{true}}">{{text}}</text>
+  </view>
+</view>

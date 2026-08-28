@@ -1,0 +1,62 @@
+<view class="loading" wx:if="{{loading}}">正在為您查詢…</view>
+
+<view class="loading" wx:elif="{{notFound}}">沒有找到該事項的詳情，可撥打12345諮詢。</view>
+
+<block wx:elif="{{detail}}">
+  <view class="card intro">
+    <view class="intro-title">{{detail.title}}</view>
+    <view class="intro-summary">{{detail.summary}}</view>
+  </view>
+
+  <view class="section-title">辦理地點</view>
+  <view class="card body-card">{{detail.where}}</view>
+
+  <view class="section-title">所需材料</view>
+  <view class="card body-card">
+    <view class="material-item" wx:for="{{detail.materials}}" wx:key="*this">· {{item}}</view>
+    <view class="copy-tip">可截圖保存本頁，到窗口前逐項核對。</view>
+  </view>
+
+  <view class="section-title">辦理時限</view>
+  <view class="card body-card">{{detail.deadline}}</view>
+
+  <view class="section-title">注意事項</view>
+  <view class="card">
+    <view class="warn-box warn-item" wx:for="{{detail.cautions}}" wx:key="*this">{{item}}</view>
+  </view>
+
+  <view class="section-title">費用參考</view>
+  <view class="card body-card">
+    <view class="fee-row" wx:for="{{detail.fees}}" wx:key="label">
+      <text class="fee-name">{{item.label}}</text>
+      <text class="fee-range">{{item.range}}</text>
+    </view>
+    <view class="copy-tip">費用僅供參考，以當地實際收費為準。</view>
+  </view>
+
+  <view class="section-title">常見問題</view>
+  <view class="card body-card">
+    <view class="faq" wx:for="{{detail.faqs}}" wx:key="q">
+      <view class="faq-q">{{item.q}}</view>
+      <view class="faq-a">{{item.a}}</view>
+    </view>
+  </view>
+
+  <view class="section-title">聯繫電話</view>
+  <view class="card contact-card">
+    <view class="contact-info">
+      <view class="contact-label">{{detail.contact.label}}</view>
+      <view class="contact-number">{{detail.contact.number}}</view>
+    </view>
+    <button class="call-btn" size="mini" bindtap="onCall">撥打</button>
+  </view>
+
+  <button class="btn-primary add-btn" bindtap="onAddToTodo">加入我的代辦清單</button>
+
+  <view class="sources">
+    <view class="sources-line" wx:for="{{detail.sources}}" wx:key="name">
+      來源：{{item.name}} ｜ 更新於{{item.updatedAt}}
+    </view>
+  </view>
+  <view class="disclaimer">信息僅供參考，請以官方窗口實際要求為準。</view>
+</block>

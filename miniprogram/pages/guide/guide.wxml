@@ -1,0 +1,50 @@
+<view class="guide-page">
+  <scroll-view
+    class="chat"
+    scroll-y
+    scroll-into-view="{{scrollInto}}"
+    scroll-with-animation
+  >
+    <view wx:for="{{messages}}" wx:key="id" id="{{item.id}}">
+      <chat-bubble
+        role="{{item.role}}"
+        text="{{item.text}}"
+        kind="{{item.kind || 'normal'}}"
+      />
+      <support-card wx:if="{{item.kind === 'crisis'}}" />
+    </view>
+    <view class="typing" wx:if="{{isTyping}}">正在輸入…</view>
+    <view class="chat-pad"></view>
+  </scroll-view>
+
+  <!-- 信息收集完成：彙總與生成 -->
+  <view class="summary-panel" wx:if="{{summaryReady}}">
+    <view class="summary-title">已確認的信息</view>
+    <view class="summary-text">{{summaryText}}</view>
+    <button class="btn-primary gen-btn" bindtap="onGenerate">生成我的辦理清單</button>
+    <view class="restart" bindtap="onRestart">信息有誤？重新填寫</view>
+  </view>
+
+  <!-- 提問區：快捷選項 + 可選的自定義輸入 -->
+  <view class="input-area" wx:else>
+    <block wx:if="{{activeStep}}">
+      <option-chips
+        options="{{activeStep.options}}"
+        disabled="{{isTyping}}"
+        bind:select="onChipSelect"
+      />
+      <view class="input-row" wx:if="{{activeStep.allowCustom}}">
+        <input
+          class="chat-input"
+          value="{{inputVal}}"
+          placeholder="{{activeStep.customPlaceholder || '輸入後發送'}}"
+          confirm-type="send"
+          disabled="{{isTyping}}"
+          bindinput="onInputVal"
+          bindconfirm="onSendInput"
+        />
+        <button class="send-btn" size="mini" disabled="{{isTyping}}" bindtap="onSendInput">發送</button>
+      </view>
+    </block>
+  </view>
+</view>

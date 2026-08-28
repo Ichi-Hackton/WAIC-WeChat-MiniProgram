@@ -1,0 +1,102 @@
+/**
+ * 全局基調：溫暖、沉穩、易讀。
+ * 面向疲憊／年長用戶：正文字號不小於 30rpx，行高放寬，重點信息顯著標註。
+ */
+page {
+  background: #F6F3EE;
+  color: #33302B;
+  font-size: 30rpx;
+  line-height: 1.65;
+}
+
+/* ---------- 通用卡片 ---------- */
+.card {
+  background: #FFFFFF;
+  border-radius: 20rpx;
+  padding: 28rpx;
+  margin: 0 32rpx 24rpx;
+  box-shadow: 0 4rpx 16rpx rgba(51, 48, 43, 0.04);
+}
+
+.section-title {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #33302B;
+  margin: 36rpx 36rpx 16rpx;
+}
+
+.muted {
+  color: #8A8378;
+  font-size: 26rpx;
+}
+
+/* ---------- 按鈕 ---------- */
+.btn-primary {
+  background: #4C6A5A;
+  color: #FFFFFF;
+  border-radius: 16rpx;
+  font-size: 32rpx;
+  font-weight: 500;
+  line-height: 2.6;
+  margin: 0 32rpx;
+}
+
+.btn-ghost {
+  background: #FFFFFF;
+  color: #4C6A5A;
+  border: 2rpx solid #C9D4CC;
+  border-radius: 16rpx;
+  font-size: 30rpx;
+  line-height: 2.4;
+  margin: 0 32rpx;
+}
+
+.btn-primary::after,
+.btn-ghost::after {
+  border: none;
+}
+
+.btn-primary.button-hover {
+  background: #3E584A;
+}
+
+.btn-ghost.button-hover {
+  background: #F2F5F1;
+}
+
+/* ---------- 重點標註 ---------- */
+.warn-box {
+  background: #FBF3E4;
+  border-radius: 12rpx;
+  padding: 18rpx 22rpx;
+  color: #8F5B13;
+  font-size: 26rpx;
+  line-height: 1.6;
+}
+
+.fee-tag {
+  display: inline-block;
+  background: #EEF2EE;
+  color: #4C6A5A;
+  border-radius: 8rpx;
+  padding: 2rpx 12rpx;
+  font-size: 24rpx;
+  margin-right: 12rpx;
+}
+
+.deadline-tag {
+  display: inline-block;
+  background: #F4EBE4;
+  color: #8F5B13;
+  border-radius: 8rpx;
+  padding: 2rpx 12rpx;
+  font-size: 24rpx;
+}
+
+/* ---------- 免責聲明 ---------- */
+.disclaimer {
+  font-size: 24rpx;
+  color: #8A8378;
+  padding: 16rpx 48rpx 40rpx;
+  text-align: center;
+}

@@ -1,0 +1,31 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/guide/guide",
+    "pages/checklist/checklist",
+    "pages/detail/detail",
+    "pages/fee/fee",
+    "pages/about/about"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#F6F3EE",
+    "navigationBarTitleText": "身後事導航助手",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#F6F3EE",
+    "backgroundTextStyle": "light"
+  },
+  "tabBar": {
+    "color": "#8A8378",
+    "selectedColor": "#4C6A5A",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "black",
+    "list": [
+      { "pagePath": "pages/index/index", "text": "首頁" },
+      { "pagePath": "pages/checklist/checklist", "text": "我的清單" },
+      { "pagePath": "pages/fee/fee", "text": "費用參考" }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

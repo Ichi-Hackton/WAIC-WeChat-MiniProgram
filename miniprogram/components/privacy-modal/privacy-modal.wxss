@@ -1,0 +1,65 @@
+.mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(38, 34, 30, 0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.modal {
+  width: 82%;
+  background: #FFFFFF;
+  border-radius: 24rpx;
+  padding: 40rpx 36rpx 32rpx;
+  max-height: 76vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+.modal-title {
+  font-size: 34rpx;
+  font-weight: 600;
+  color: #33302B;
+  text-align: center;
+  margin-bottom: 24rpx;
+}
+
+.point {
+  display: flex;
+  margin-bottom: 14rpx;
+}
+
+.point-dot {
+  color: #4C6A5A;
+  margin-right: 14rpx;
+  font-weight: 600;
+}
+
+.point-text {
+  flex: 1;
+  font-size: 28rpx;
+  color: #4A463F;
+  line-height: 1.6;
+}
+
+.modal-note {
+  font-size: 24rpx;
+  color: #8A8378;
+  margin-top: 20rpx;
+  text-align: center;
+}
+
+.ack-btn {
+  margin-top: 28rpx;
+  background: #4C6A5A;
+  color: #FFFFFF;
+  font-size: 30rpx;
+  border-radius: 16rpx;
+  line-height: 2.4;
+}
+
+.ack-btn::after {
+  border: none;
+}

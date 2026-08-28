@@ -1,0 +1,13 @@
+<view class="chips {{disabled ? 'chips-disabled' : ''}}">
+  <view
+    class="chip"
+    wx:for="{{options}}"
+    wx:key="value"
+    data-value="{{item.value}}"
+    data-label="{{item.label}}"
+    bindtap="onPick"
+    hover-class="chip-hover"
+  >
+    {{item.label}}
+  </view>
+</view>

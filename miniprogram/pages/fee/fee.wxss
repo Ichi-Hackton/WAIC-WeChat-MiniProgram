@@ -1,0 +1,107 @@
+.city-bar {
+  display: flex;
+  flex-wrap: wrap;
+  padding: 20rpx 24rpx 4rpx;
+}
+
+.city-chip {
+  background: #FFFFFF;
+  border: 2rpx solid #E3DCD0;
+  color: #4A463F;
+  border-radius: 999rpx;
+  padding: 10rpx 32rpx;
+  margin: 0 14rpx 14rpx 0;
+  font-size: 28rpx;
+}
+
+.city-chip-active {
+  background: #4C6A5A;
+  border-color: #4C6A5A;
+  color: #FFFFFF;
+}
+
+.loading {
+  padding: 120rpx 48rpx;
+  text-align: center;
+  color: #8A8378;
+  font-size: 28rpx;
+}
+
+.fee-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 12rpx 0;
+}
+
+.fee-name {
+  color: #4A463F;
+  font-size: 28rpx;
+}
+
+.fee-range {
+  color: #4C6A5A;
+  font-weight: 500;
+  font-size: 28rpx;
+  text-align: right;
+}
+
+.fee-note {
+  margin-top: 14rpx;
+  color: #8A8378;
+  font-size: 24rpx;
+}
+
+.subsidy-text {
+  font-size: 28rpx;
+  color: #4A463F;
+  line-height: 1.7;
+}
+
+.ghost-link {
+  margin-top: 18rpx;
+  background: #EEF2EE;
+  color: #3E584A;
+  font-size: 26rpx;
+  border-radius: 12rpx;
+  line-height: 2.2;
+}
+
+.ghost-link::after {
+  border: none;
+}
+
+.trap-item {
+  margin-bottom: 14rpx;
+}
+
+.trap-item:last-child {
+  margin-bottom: 0;
+}
+
+.policy-summary {
+  font-size: 28rpx;
+  color: #4A463F;
+  line-height: 1.7;
+}
+
+.policy-channel {
+  margin-top: 12rpx;
+  font-size: 26rpx;
+  color: #4C6A5A;
+}
+
+.policy-channel + .trap-item {
+  margin-top: 16rpx;
+}
+
+.sources {
+  margin-top: 28rpx;
+  text-align: center;
+}
+
+.sources-line {
+  color: #B4ACA0;
+  font-size: 22rpx;
+  line-height: 1.8;
+}

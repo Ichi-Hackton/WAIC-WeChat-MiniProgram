@@ -1,0 +1,27 @@
+<view class="hero">
+  <view class="hero-mark">🕯</view>
+  <view class="hero-title">身後事導航助手</view>
+  <view class="hero-sub">把複雜的流程，翻譯成能一步步執行的清單</view>
+  <view class="hero-condo">{{condolence}}</view>
+</view>
+
+<button class="btn-primary primary-btn" bindtap="onPrimaryTap">{{primaryLabel}}</button>
+
+<view class="entry-grid">
+  <view class="entry" bindtap="onChecklistTap" hover-class="entry-hover">
+    <view class="entry-name">我的清單</view>
+    <view class="entry-desc">勾選進度與家庭分工</view>
+  </view>
+  <view class="entry" bindtap="onFeeTap" hover-class="entry-hover">
+    <view class="entry-name">費用參考</view>
+    <view class="entry-desc">政府定價與加價陷阱</view>
+  </view>
+  <view class="entry" bindtap="onAboutTap" hover-class="entry-hover">
+    <view class="entry-name">隱私與說明</view>
+    <view class="entry-desc">數據僅存本地，可一鍵清除</view>
+  </view>
+</view>
+
+<view class="disclaimer">信息僅供參考，請以官方窗口實際要求為準。</view>
+
+<privacy-modal show="{{showPrivacy}}" bind:ack="onAckPrivacy" />

@@ -1,0 +1,41 @@
+<view wx:if="{{empty}}" class="empty">
+  <view class="empty-mark">☐</view>
+  <view class="empty-title">還沒有辦理清單</view>
+  <view class="empty-desc">回答幾個簡單的問題，就會為您生成按時間段整理的清單。</view>
+  <button class="btn-primary empty-btn" bindtap="onGoGuide">開始引導</button>
+</view>
+
+<block wx:else>
+  <view class="card head">
+    <view class="head-row">
+      <view class="head-profile">{{profileText}}</view>
+      <view class="head-edit" bindtap="onEdit">修改信息</view>
+    </view>
+    <view class="head-progress">{{progressText}} ｜ 生成於 {{updatedText}}</view>
+    <view class="progress-track">
+      <view class="progress-inner" style="width: {{progressPercent}}%"></view>
+    </view>
+  </view>
+
+  <block wx:for="{{stages}}" wx:for-item="stage" wx:key="id">
+    <view class="section-title">{{stage.title}}</view>
+    <task-card
+      wx:for="{{stage.tasks}}"
+      wx:key="id"
+      task="{{item}}"
+      done="{{item.done}}"
+      claimer="{{item.claimer}}"
+      bind:toggle="onTaskToggle"
+      bind:claim="onTaskClaim"
+      bind:detail="onTaskDetail"
+    />
+  </block>
+
+  <view class="share-area">
+    <button class="btn-primary copy-btn" bindtap="onCopy">複製協作清單，發給家人</button>
+    <button class="btn-ghost share-btn" open-type="share">分享小程序給家人</button>
+    <view class="share-tip">複製後粘貼到家庭微信群，家人可認領事項、分工處理。</view>
+  </view>
+
+  <view class="disclaimer">信息僅供參考，請以官方窗口實際要求為準。</view>
+</block>

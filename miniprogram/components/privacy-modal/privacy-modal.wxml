@@ -1,0 +1,11 @@
+<view class="mask" wx:if="{{show}}">
+  <view class="modal">
+    <view class="modal-title">在使用前，想先告訴您</view>
+    <view class="point" wx:for="{{points}}" wx:key="*this">
+      <text class="point-dot">·</text>
+      <text class="point-text">{{item}}</text>
+    </view>
+    <view class="modal-note">{{disclaimer}}</view>
+    <button class="ack-btn" bindtap="onAck">好的，我知道了</button>
+  </view>
+</view>

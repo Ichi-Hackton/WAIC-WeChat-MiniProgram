@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "身後事導航助手",
+  "usingComponents": {
+    "privacy-modal": "/components/privacy-modal/privacy-modal"
+  }
+}

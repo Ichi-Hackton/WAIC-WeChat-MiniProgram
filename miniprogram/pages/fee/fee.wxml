@@ -1,0 +1,55 @@
+<view class="city-bar">
+  <view
+    class="city-chip {{activeCity === item ? 'city-chip-active' : ''}}"
+    wx:for="{{cities}}"
+    wx:key="*this"
+    data-city="{{item}}"
+    bindtap="onPickCity"
+  >{{item}}</view>
+</view>
+
+<view class="loading" wx:if="{{loading}}">正在查詢費用參考…</view>
+
+<block wx:elif="{{fee}}">
+  <view class="section-title">基礎服務（政府定價，必須有）</view>
+  <view class="card">
+    <view class="fee-row" wx:for="{{fee.baseServices}}" wx:key="name">
+      <text class="fee-name">{{item.name}}</text>
+      <text class="fee-range">{{item.price}}</text>
+    </view>
+  </view>
+
+  <view class="section-title">常見用品價格區間（市場價）</view>
+  <view class="card">
+    <view class="fee-row" wx:for="{{fee.supplies}}" wx:key="name">
+      <text class="fee-name">{{item.name}}</text>
+      <text class="fee-range">{{item.range}}</text>
+    </view>
+    <view class="fee-note">費用僅供參考，以當地實際收費為準。</view>
+  </view>
+
+  <view class="section-title">喪葬補助金</view>
+  <view class="card">
+    <view class="subsidy-text">{{fee.subsidyNote}}</view>
+    <button class="ghost-link" size="mini" bindtap="onSubsidyGuide">查看申領指引</button>
+  </view>
+
+  <view class="section-title">⚠️ 常見加價陷阱</view>
+  <view class="card">
+    <view class="warn-box trap-item" wx:for="{{fee.traps}}" wx:key="*this">{{item}}</view>
+  </view>
+
+  <view class="section-title" wx:if="{{policy}}">當地辦理提示</view>
+  <view class="card" wx:if="{{policy}}">
+    <view class="policy-summary">{{policy.summary}}</view>
+    <view class="policy-channel" wx:if="{{policy.oneStop && policy.oneStopChannel}}">聯辦入口：{{policy.oneStopChannel}}</view>
+    <view class="warn-box trap-item" wx:for="{{policy.notes}}" wx:key="*this">提示：{{item}}</view>
+  </view>
+
+  <view class="sources">
+    <view class="sources-line" wx:for="{{fee.sources}}" wx:key="name">
+      來源：{{item.name}} ｜ 更新於{{item.updatedAt}}
+    </view>
+  </view>
+  <view class="disclaimer">信息僅供參考，請以官方窗口實際要求為準。</view>
+</block>
