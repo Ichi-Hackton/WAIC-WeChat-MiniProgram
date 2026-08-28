@@ -427,3 +427,15 @@ FodyWeavers.xsd
 *.msix
 *.msm
 *.msp
+
+# ===== 微信小程序（身後事導航助手）=====
+# 本地私有配置（含真實 AppID，永不入庫）
+project.private.config.json
+
+# 構建與測試產物
+coverage/
+dist/
+.eslintcache
+
+# 微信開發者工具本地緩存
+.wechat-ide/
