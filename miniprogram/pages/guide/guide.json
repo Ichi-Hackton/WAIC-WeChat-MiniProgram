@@ -1,8 +1,0 @@
-{
-  "navigationBarTitleText": "辦理引導",
-  "usingComponents": {
-    "chat-bubble": "/components/chat-bubble/chat-bubble",
-    "option-chips": "/components/option-chips/option-chips",
-    "support-card": "/components/support-card/support-card"
-  }
-}
