@@ -1,0 +1,80 @@
+<view class="page">
+  <!-- 新对话悬浮按钮 -->
+  <view class="fab-new-chat" bindtap="onNewChat">✚</view>
+
+  <!-- 消息区 -->
+  <scroll-view
+    class="chat-area"
+    scroll-y
+    scroll-into-view="{{scrollIntoView}}"
+    scroll-with-animation
+  >
+    <!-- 快捷指令宫格（新会话首屏，降低输入门槛） -->
+    <view wx:if="{{showQuickGrid}}" class="quick-grid">
+      <view class="grid-title">— 老师您可以直接说，也可以试试这些 —</view>
+      <view class="grid">
+        <view
+          class="grid-item"
+          wx:for="{{quickCommands}}"
+          wx:key="id"
+          data-preset="{{item.preset}}"
+          bindtap="onQuickCommand"
+        >
+          <view class="grid-icon">{{item.icon}}</view>
+          <view class="grid-label">{{item.label}}</view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 消息列表 -->
+    <view class="messages">
+      <view wx:for="{{messages}}" wx:key="id" id="msg-{{item.id}}">
+        <message-bubble
+          message="{{item}}"
+          typing="{{typing && index === messages.length - 1 && item.role === 'assistant'}}"
+        />
+      </view>
+      <view class="messages-bottom-space"></view>
+    </view>
+  </scroll-view>
+
+  <!-- 流式加载提示（幼教场景提示语轮播） -->
+  <view class="status-bar" wx:if="{{typing}}">
+    <view class="loading-spinner"></view>
+    <text class="status-text">{{loadingTip}}</text>
+  </view>
+
+  <!-- 快捷指令气泡条 -->
+  <view class="quick-bar">
+    <scroll-view scroll-x class="quick-scroll" enhanced show-scrollbar="{{false}}">
+      <view class="chips">
+        <view
+          class="chip"
+          wx:for="{{quickCommands}}"
+          wx:key="id"
+          data-preset="{{item.preset}}"
+          bindtap="onQuickCommand"
+        >{{item.icon}} {{item.label}}</view>
+      </view>
+    </scroll-view>
+  </view>
+
+  <!-- 输入区 -->
+  <view class="input-bar">
+    <view class="mic-btn" bindtap="onMic">🎤</view>
+    <input
+      class="input"
+      value="{{inputValue}}"
+      bindinput="onInput"
+      bindconfirm="onSend"
+      confirm-type="send"
+      placeholder="描述您的需求，如：写一份中班秋天主题教案…"
+      placeholder-class="input-placeholder"
+      adjust-position
+    />
+    <view
+      class="send-btn {{inputValue ? 'send-active' : ''}}"
+      bindtap="onSend"
+    >发送</view>
+  </view>
+</view>

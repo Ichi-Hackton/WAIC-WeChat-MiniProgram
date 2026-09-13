@@ -1,0 +1,53 @@
+/* 历史记录列表页样式 */
+.history-page {
+  padding: 24rpx;
+}
+
+.conv-card {
+  background: #ffffff;
+  border-radius: 20rpx;
+  padding: 26rpx 28rpx;
+  margin-bottom: 20rpx;
+  box-shadow: 0 4rpx 16rpx rgba(255, 140, 66, 0.08);
+}
+.conv-card:active {
+  background: #FFFDF8;
+}
+
+.conv-head {
+  display: flex;
+  align-items: center;
+}
+
+.conv-title {
+  font-size: 30rpx;
+  font-weight: 600;
+  color: #333333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 14rpx;
+  font-size: 22rpx;
+  color: #b9a898;
+}
+
+.empty-hint {
+  font-size: 24rpx;
+  margin-top: 6rpx;
+}
+.empty-btn {
+  margin-top: 32rpx;
+  background: #FF8C42;
+  color: #ffffff;
+  border-radius: 999rpx;
+  padding: 16rpx 48rpx;
+  font-size: 28rpx;
+}
+.empty-btn:active {
+  opacity: 0.85;
+}

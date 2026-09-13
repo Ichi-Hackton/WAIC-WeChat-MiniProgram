@@ -1,0 +1,29 @@
+<view class="history-page">
+  <!-- 会话列表 -->
+  <view
+    wx:for="{{conversations}}"
+    wx:key="id"
+    class="conv-card"
+    data-id="{{item.id}}"
+    bindtap="onOpen"
+    bindlongpress="onLongPress"
+  >
+    <view class="conv-head">
+      <view wx:if="{{item.category}}" class="tag">{{item.category}}</view>
+      <view class="conv-title">{{item.title || '未命名对话'}}</view>
+    </view>
+    <view class="conv-meta">
+      <text class="meta-time">{{item.updatedAt}}</text>
+      <text class="meta-count">{{item.messages.length}} 条对话</text>
+    </view>
+  </view>
+
+  <!-- 空状态 -->
+  <view wx:if="{{!conversations.length}}" class="empty-state">
+    <view class="empty-icon">🗂</view>
+    <view>还没有历史记录哦～</view>
+    <view class="empty-hint">在「智多星」页生成的教案、评语、话术</view>
+    <view class="empty-hint">都会自动保存在这里</view>
+    <view class="empty-btn" bindtap="onGoChat">去和智多星聊聊</view>
+  </view>
+</view>

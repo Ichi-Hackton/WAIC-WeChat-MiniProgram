@@ -1,0 +1,6 @@
+{
+  "usingComponents": {
+    "message-bubble": "/components/message-bubble/message-bubble"
+  },
+  "navigationBarTitleText": "幼教智多星"
+}

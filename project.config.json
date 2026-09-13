@@ -1,0 +1,25 @@
+{
+  "description": "幼教智多星 (Kinder-Care AI) - 幼师专属 AI 办公助理",
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  },
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    },
+    "condition": false
+  },
+  "compileType": "miniprogram",
+  "libVersion": "3.0.0",
+  "appid": "touristappid",
+  "projectname": "WAIC-WeChat-MiniProgram",
+  "condition": {}
+}

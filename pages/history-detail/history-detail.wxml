@@ -1,0 +1,18 @@
+<view class="detail-page">
+  <!-- 会话信息头 -->
+  <view class="detail-head" wx:if="{{conversation}}">
+    <view wx:if="{{conversation.category}}" class="tag">{{conversation.category}}</view>
+    <text class="head-time">{{conversation.updatedAt}}</text>
+  </view>
+
+  <!-- 消息列表（复用气泡组件，Markdown 渲染） -->
+  <view class="detail-messages">
+    <message-bubble wx:for="{{messages}}" wx:key="id" message="{{item}}" />
+  </view>
+
+  <!-- 底部操作 -->
+  <view class="detail-actions">
+    <view class="action-primary-btn" bindtap="onCopyAll">复制整段对话</view>
+    <view class="action-danger-btn" bindtap="onDelete">删除</view>
+  </view>
+</view>

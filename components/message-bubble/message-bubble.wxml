@@ -1,0 +1,31 @@
+<view class="bubble-row {{message.role === 'user' ? 'row-right' : 'row-left'}}">
+  <view wx:if="{{message.role === 'assistant'}}" class="avatar">🌟</view>
+  <view class="bubble {{message.role === 'user' ? 'bubble-user' : 'bubble-ai'}}">
+    <!-- 用户消息：纯文本 -->
+    <block wx:if="{{message.role === 'user'}}">
+      <text user-select>{{message.content}}</text>
+    </block>
+
+    <!-- 助手消息 -->
+    <block wx:else>
+      <!-- 等待首字：跳动圆点 -->
+      <view wx:if="{{typing && !message.content}}" class="typing-dots">
+        <view class="dot dot1"></view>
+        <view class="dot dot2"></view>
+        <view class="dot dot3"></view>
+      </view>
+      <!-- 流式中：纯文本 + 闪烁光标 -->
+      <view wx:elif="{{typing}}" class="streaming-text">
+        <text user-select>{{message.content}}</text><text class="cursor">▌</text>
+      </view>
+      <!-- 完成：Markdown 渲染 -->
+      <rich-text wx:else nodes="{{nodes}}" user-select></rich-text>
+    </block>
+  </view>
+</view>
+
+<!-- 助手消息操作栏：复制全文 / 一键复制话术（Agent.md 4.2） -->
+<view wx:if="{{message.role === 'assistant' && !typing && message.content}}" class="bubble-actions">
+  <view wx:if="{{codeBlock}}" class="action-btn action-primary" catchtap="onCopyCode">一键复制话术</view>
+  <view class="action-btn" catchtap="onCopyAll">复制全文</view>
+</view>

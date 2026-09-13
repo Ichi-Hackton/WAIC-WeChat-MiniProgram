@@ -1,0 +1,50 @@
+/* 历史详情页样式 */
+.detail-page {
+  padding: 24rpx 24rpx 180rpx;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20rpx;
+}
+.head-time {
+  font-size: 24rpx;
+  color: #b9a898;
+}
+
+.detail-actions {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  padding: 16rpx 24rpx calc(16rpx + env(safe-area-inset-bottom));
+  background: #ffffff;
+  box-shadow: 0 -4rpx 16rpx rgba(0, 0, 0, 0.04);
+}
+.action-primary-btn {
+  flex: 1;
+  background: #FF8C42;
+  color: #ffffff;
+  text-align: center;
+  border-radius: 44rpx;
+  padding: 18rpx 0;
+  font-size: 30rpx;
+  margin-right: 20rpx;
+}
+.action-primary-btn:active {
+  opacity: 0.85;
+}
+.action-danger-btn {
+  background: #ffffff;
+  color: #e64340;
+  border: 1rpx solid #f5c6c1;
+  text-align: center;
+  border-radius: 44rpx;
+  padding: 18rpx 44rpx;
+  font-size: 30rpx;
+}
+.action-danger-btn:active {
+  background: #fdf3f2;
+}

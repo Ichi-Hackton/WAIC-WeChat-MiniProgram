@@ -1,0 +1,32 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/history/history",
+    "pages/history-detail/history-detail"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#FFF7E8",
+    "navigationBarTitleText": "幼教智多星",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#FFF9F0"
+  },
+  "tabBar": {
+    "color": "#999999",
+    "selectedColor": "#FF8C42",
+    "backgroundColor": "#ffffff",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "智多星"
+      },
+      {
+        "pagePath": "pages/history/history",
+        "text": "历史记录"
+      }
+    ]
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2"
+}
