@@ -1,0 +1,19 @@
+{
+  "name": "micromate",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MicroMate — 你的隨身個人 AI 助理（微信小程序內的跨 SKILL 任務編排 Agent）",
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "build": "tsc --noEmit"
+  },
+  "keywords": [
+    "micromate",
+    "wechat-miniprogram",
+    "agent",
+    "skill-orchestrator",
+    "dag"
+  ],
+  "author": "",
+  "license": "UNLICENSED"
+}

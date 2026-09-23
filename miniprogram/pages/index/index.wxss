@@ -1,0 +1,22 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  padding: 32rpx;
+  box-sizing: border-box;
+}
+
+.brand {
+  font-size: 64rpx;
+  font-weight: 700;
+  color: #1a1a1a;
+  letter-spacing: 2rpx;
+}
+
+.tagline {
+  margin-top: 24rpx;
+  font-size: 28rpx;
+  color: #888;
+}

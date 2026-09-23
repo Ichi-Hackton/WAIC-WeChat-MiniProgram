@@ -1,0 +1,4 @@
+<view class="container">
+  <text class="brand">{{brandName}}</text>
+  <text class="tagline">{{brandTagline}}</text>
+</view>
