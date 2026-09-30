@@ -25,3 +25,6 @@ Thumbs.db
 *.local
 .env
 .env.*
+
+# 微信開發者工具個人本地配置（多人協作時避免互相覆蓋本地設定）
+project.private.config.json

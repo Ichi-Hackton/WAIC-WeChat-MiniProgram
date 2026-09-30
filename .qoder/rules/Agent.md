@@ -71,6 +71,9 @@ description: MicroMate 專案級 AI 代理指引——規範三層架構、SKILL
 
 ## 4. 目錄結構
 
+> **實體位置**：`src/` 位於 `miniprogram/src/`——微信開發者工具僅打包 `miniprogramRoot`（`miniprogram/`）內的檔案，
+> 所有執行時程式碼（含 Agent 引擎源碼）必須留在包內，**禁止跨出包根引用**（如 `../src`）。
+
 ```
 src/
 ├── core/                    # Agent 核心引擎
@@ -400,16 +403,34 @@ export const instance: SkillInstance = {
 
 ## 11. 微信 AI 開發模式接入
 
-### 11.1 `app.json` 宣告
+> **方向澄清**：微信官方「小程序 AI 開發模式」是 **SKILL 提供方側**配置 —— 將本小程序
+> 的功能封裝為原子接口 / 原子組件，暴露給微信官方的小程序 AI 調度。MicroMate 當前架構
+> 為 **Agent 中樞側**（自有 Orchestrator 透過 `wx.cloud.callContainer` 調度第三方 SKILL），
+> **不需要**也**不得**在 app.json 配置 AI 開發模式欄位。歷史版本曾錯誤使用 `"ai"` 欄位
+> —— 基礎庫 app.json schema 不存在該欄位，運行時報「無效的 app.json [\"ai\"]」。
+
+### 11.1 官方正確欄位（將來作為 SKILL 提供方接入時啟用）
+
+- 欄位名為 **`agent`**（非 `ai`），SKILL 需封裝於**獨立分包**，且全域開啟按需注入：
 
 ```json
 {
-  "ai": {
-    "mode": "development",
-    "skills": ["skill.train.12306", "skill.coffee.starbucks"]
+  "lazyCodeLoading": "requiredComponents",
+  "subPackages": [
+    { "root": "skills/pkg", "independent": true, "pages": [] }
+  ],
+  "agent": {
+    "skills": [
+      { "name": "micromateSkill", "description": "...", "path": "skills/pkg/micromateSkill" }
+    ],
+    "instruction": "path/to/AGENTS.md"
   }
 }
 ```
+
+- 運行時以 `wx.modelContext.createSkill(skillPath)` 建立、`skill.registerAPI(name, handler)` 註冊原子接口
+- 前置 `lazyCodeLoading` 已全域開啟，將來接入無需變更
+- 詳見官方文檔：《小程序 AI 開發模式接入指南》（developers.weixin.qq.com/miniprogram/dev/ai/integration.html）
 
 ### 11.2 呼叫第三方 SKILL
 
@@ -460,6 +481,7 @@ wx.requestPayment({
 - `utils/` 不得 `import 'wx.*'`，保持純函式可單元測試
 - `services/` 為 wx API 唯一封裝層
 - 依賴方向：`interaction → core → skills → llm`，單向不可逆
+- **import 路徑必須顯式指向檔案**：微信運行時 require 不支援 Node 式目錄解析（`'./xxx'` 不會自動解析為 `'./xxx/index.js'`），引用目錄模組必須寫全 `/index`（如 `from './skills/builtin/train-12306/index'`），否則編譯後報 `module is not defined`（`tsc --noEmit` 不會報錯，因為 tsc 會做目錄解析）
 
 ### 12.4 命名
 
