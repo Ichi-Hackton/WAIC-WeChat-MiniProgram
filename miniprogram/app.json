@@ -9,5 +9,12 @@
     "backgroundTextStyle": "light"
   },
   "style": "v2",
-  "sitemapLocation": "sitemap.json"
+  "lazyCodeLoading": "requiredComponents",
+  "sitemapLocation": "sitemap.json",
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用於為您推薦附近的門市與車站"
+    }
+  },
+  "requiredPrivateInfos": ["getLocation"]
 }

@@ -15,9 +15,9 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["miniprogram/src/*"]
     }
   },
-  "include": ["src/**/*.ts", "miniprogram/**/*.ts"],
+  "include": ["miniprogram/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

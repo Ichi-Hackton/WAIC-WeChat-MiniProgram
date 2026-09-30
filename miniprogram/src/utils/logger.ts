@@ -7,7 +7,7 @@
  * 所有日誌前綴固定為 `[BRAND_NAME][LEVEL]`，便於日誌聚合與品牌溯源。
  */
 
-import { BRAND_NAME, BRAND_VERSION } from '../types/brand';
+import { BRAND_NAME } from '../types/brand';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -58,9 +58,4 @@ export function warn(...args: unknown[]): void {
 /** Error 等級日誌，永遠輸出（不受門檻限制） */
 export function error(...args: unknown[]): void {
   console.error(prefix('error'), stamp(), ...args);
-}
-
-/** 啟動 banner，集中輸出品牌資訊 */
-export function banner(): void {
-  info(`${BRAND_NAME} v${BRAND_VERSION} 已就緒`);
 }

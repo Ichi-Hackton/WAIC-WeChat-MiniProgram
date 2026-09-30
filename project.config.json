@@ -2,6 +2,9 @@
   "miniprogramRoot": "miniprogram/",
   "projectname": "micromate",
   "setting": {
+    "useCompilerPlugins": [
+      "typescript"
+    ],
     "urlCheck": false,
     "es6": true,
     "enhance": true,
@@ -10,10 +13,30 @@
     "newFeature": true,
     "uglifyFileName": false,
     "checkInvalidKey": true,
-    "checkSiteMap": true
+    "checkSiteMap": true,
+    "compileWorklet": false,
+    "uploadWithSourceMap": true,
+    "packNpmManually": false,
+    "packNpmRelationList": [],
+    "minifyWXSS": true,
+    "minifyWXML": true,
+    "localPlugins": false,
+    "disableUseStrict": false,
+    "condition": false,
+    "babelSetting": {
+      "ignore": [],
+      "disablePlugins": [],
+      "outputPath": ""
+    }
   },
   "compileType": "miniprogram",
   "libVersion": "3.0.0",
-  "appid": "touristappid",
-  "condition": {}
+  "appid": "wx9f9cf0c94a85dcc1",
+  "condition": {},
+  "simulatorPluginLibVersion": {},
+  "packOptions": {
+    "ignore": [],
+    "include": []
+  },
+  "editorSetting": {}
 }
