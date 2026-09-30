@@ -1,0 +1,42 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: main
+nodes_managed: true
+exported_at: "2026-09-30T02:59:14Z"
+modules:
+    "":
+        dir_name: MicroMate 微信小程序与雲托管服务根工程
+        title: MicroMate 微信小程序与雲托管服务根工程
+        scope:
+            - package.json
+            - project.config.json
+            - tsconfig.json
+            - package-lock.json
+            - .gitignore
+        source_files: []
+        children:
+            - cloudrun
+            - miniprogram
+        depends_on: []
+        related_to: []
+    cloudrun:
+        dir_name: MicroMate 雲托管 HTTP 服務（LLM 代理與 SKILL 端點）
+        title: MicroMate 雲托管 HTTP 服務（LLM 代理與 SKILL 端點）
+        scope:
+            - cloudrun/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: miniprogram
+    miniprogram:
+        dir_name: MicroMate 微信小程序 Agent 运行时
+        title: MicroMate 微信小程序 Agent 运行时
+        scope:
+            - miniprogram/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: cloudrun

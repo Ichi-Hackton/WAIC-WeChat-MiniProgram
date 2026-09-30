@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: miniprogram
+title: MicroMate 微信小程序 Agent 运行时
+scope:
+    - miniprogram/
+source_files: []
+depends_on: []
+related_to:
+    - path: cloudrun

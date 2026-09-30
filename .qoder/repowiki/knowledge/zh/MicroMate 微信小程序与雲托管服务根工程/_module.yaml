@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: ""
+title: MicroMate 微信小程序与雲托管服务根工程
+scope:
+    - package.json
+    - project.config.json
+    - tsconfig.json
+    - package-lock.json
+    - .gitignore
+source_files: []
+depends_on: []
+related_to: []
