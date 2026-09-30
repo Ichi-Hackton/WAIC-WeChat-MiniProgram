@@ -1,0 +1,16 @@
+{
+  "name": "micromate-cloudrun",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MicroMate 雲托管容器服務 — LLM 代理與 SKILL 端點（零運行時依賴，僅 Node 內建模組）",
+  "scripts": {
+    "build": "tsc -p .",
+    "start": "node dist/server.js",
+    "type-check": "tsc -p . --noEmit"
+  },
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.6.3"
+  }
+}
