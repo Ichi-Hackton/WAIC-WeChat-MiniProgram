@@ -1,4 +1,76 @@
-<view class="container">
-  <text class="brand">{{brandName}}</text>
-  <text class="tagline">{{brandTagline}}</text>
+<view class="page">
+  <!-- 頂部品牌列 -->
+  <view class="header">
+    <text class="brand">{{brandName}}</text>
+    <text class="tagline">{{brandTagline}}</text>
+    <view class="reset-btn" bindtap="onTapReset">重置</view>
+  </view>
+
+  <!-- 狀態指示列（階段中文文案，隨 runtime 狀態機即時變化） -->
+  <view class="status-bar">
+    <view class="status-dot {{state === 'failed' ? 'dot-failed' : (state === 'completed' ? 'dot-ok' : 'dot-busy')}}"></view>
+    <text class="status-label">狀態</text>
+    <text class="status-value {{state === 'failed' ? 'state-failed' : (state === 'completed' ? 'state-ok' : 'state-busy')}}">{{stateLabel}}</text>
+  </view>
+
+  <!-- 對話氣泡列表（新訊息自動捲動） -->
+  <scroll-view class="chat" scroll-y="true" scroll-into-view="{{scrollIntoView}}" scroll-with-animation="true">
+    <block wx:for="{{messages}}" wx:key="id">
+      <view class="bubble bubble-{{item.role}}" id="{{item.id}}">
+        <view class="bubble-role">{{item.role === 'user' ? '你' : brandName}}</view>
+        <view class="bubble-content">{{item.content}}</view>
+        <view wx:if="{{item.cards && item.cards.length > 0}}" class="cards">
+          <block wx:for="{{item.cards}}" wx:for-item="card" wx:key="title">
+            <view class="card card-{{card.type}}">
+              <view class="card-head">
+                <text class="card-title">{{card.title}}</text>
+                <text wx:if="{{card.payload.statusLabel}}" class="task-badge task-{{card.payload.status}}">{{card.payload.statusLabel}}</text>
+              </view>
+              <text wx:if="{{card.payload.skill}}" class="card-skill">{{card.payload.skill}}</text>
+              <text wx:if="{{card.payload.error}}" class="card-error-text">{{card.payload.error}}</text>
+            </view>
+          </block>
+        </view>
+      </view>
+    </block>
+    <view wx:if="{{loading}}" class="bubble bubble-assistant" id="loading-bubble">
+      <view class="bubble-role">{{brandName}}</view>
+      <view class="bubble-content loading-line">
+        <text>{{stateLabel}}</text>
+        <view class="dots">
+          <view class="dot"></view>
+          <view class="dot"></view>
+          <view class="dot"></view>
+        </view>
+      </view>
+    </view>
+  </scroll-view>
+
+  <!-- 範例提示（僅首輪顯示） -->
+  <view wx:if="{{messages.length <= 1}}" class="examples">
+    <text class="examples-title">試試這些：</text>
+    <view class="example-chip" bindtap="onTapExample" data-text="明天北京到上海的高鐵，二等座">
+      <text>明天北京到上海的高鐵</text>
+    </view>
+    <view class="example-chip" bindtap="onTapExample" data-text="上海附近的星巴克">
+      <text>附近星巴克</text>
+    </view>
+    <view class="example-chip" bindtap="onTapExample" data-text="幫我點一杯拿鐵">
+      <text>幫我點一杯拿鐵</text>
+    </view>
+  </view>
+
+  <!-- 輸入區（loading 僅鎖發送，不鎖輸入） -->
+  <view class="input-bar">
+    <view class="mic-btn" bindtap="onTapMic">🎙</view>
+    <input
+      class="input"
+      value="{{inputText}}"
+      bindinput="onInput"
+      bindconfirm="onSend"
+      placeholder="說出你的需求..."
+      confirm-type="send"
+    />
+    <view class="send-btn {{inputText.length > 0 && !loading ? 'send-btn-active' : ''}} {{loading ? 'send-btn-disabled' : ''}}" bindtap="onSend">發送</view>
+  </view>
 </view>
