@@ -14,6 +14,12 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# 開發驗證日誌旁路落盤（/api/dev-log 端點寫入，僅本地）
+cloudrun/logs/
+
+# 模擬器驗證截圖（臨時取證產物）
+test-screenshots/
+
 # OS / Editor
 .DS_Store
 Thumbs.db
@@ -25,6 +31,13 @@ Thumbs.db
 *.local
 .env
 .env.*
+
+# 本地 MCP 工具目錄（12306-mcp 等，由 mcp-start.ps1 首次運行自動安裝）
+.mcp/
+
+# 臨時調試產物（驗證腳本 / 截圖 / 探測中間產物）
+.debug_tmp/
+.tmp-ui/
 
 # 微信開發者工具個人本地配置（多人協作時避免互相覆蓋本地設定）
 project.private.config.json

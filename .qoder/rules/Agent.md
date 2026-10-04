@@ -47,7 +47,7 @@ description: MicroMate 專案級 AI 代理指引——規範三層架構、SKILL
 |------|------|
 | **SKILL 優先** | Agent 不直接操作業務，只呼叫標準化 SKILL |
 | **宣告式編排** | 任務以 DAG 描述依賴，引擎自動調度 |
-| **Human-in-the-Loop** | 涉及支付、隱私、不可逆操作必須由用戶確認 |
+| **Human-in-the-Loop** | 預設自動執行（「最小打擾」原則）；支付 / 隱私 / 不可逆場景保留 checkpoint hook 可重啟 |
 | **冪等與可回滾** | 每個 SKILL 必須支援 `rollback`，失敗可部分撤銷 |
 | **型別安全** | SKILL 入參/出參透過泛型強約束，禁止寬鬆型別 |
 
@@ -88,6 +88,8 @@ src/
 │   └── builtin/             # 內建 SKILL
 │       ├── train-12306/
 │       ├── coffee-starbucks/
+│       ├── shopping-mall/
+│       ├── booking-center/
 │       └── payment-aicard/
 │
 ├── llm/                     # 大模型接入
@@ -285,7 +287,9 @@ export interface ChatMessage {
 1. 提供 `meta`，其中 `description` 必須清楚描述「能做什麼 / 不能做什麼 / 何時觸發」（這是 LLM 規劃的唯一依據）
 2. 實作 `invoke(capability, input, ctx)`
 3. 若 `reversible=true`，**必須**實作 `rollback(capability, input, result, ctx)`
-4. 所有寫操作 capability 的 `requiresHumanConfirm` 必須為 `true`
+4. 寫操作 capability 的 `requiresHumanConfirm` 預設為 `false`（2026-10 修訂：預設自動執行，
+   遵循「最小打擾」原則；安全网靠 rollback 機制 + AI 專屬卡銀行級密碼框 + 重置按鈕）。
+   支付 / 隱私 / 不可逆場景可手動設為 `true` 以重啟 checkpoint 彈窗
 5. 透過 `wx.cloud.callContainer` 呼叫雲端能力，禁止在小程序端直接對接第三方 API
 
 ### 7.2 標準骨架
@@ -308,7 +312,7 @@ export const meta: SkillMeta = {
     outputSchema: { /* JSON Schema */ },
     idempotent: true | false,
     reversible: true | false,
-    requiresHumanConfirm: true | false,  // 寫操作必須為 true
+    requiresHumanConfirm: true | false,  // 預設 false（最小打擾）；寫操作一般不需要，支付 / 不可逆場景設為 true
     estimatedLatencyMs: 1000,
   }],
 };
@@ -341,7 +345,8 @@ export const instance: SkillInstance = {
 ### 8.1 Orchestrator
 
 - **必須以狀態機驅動**，禁止跳過 `confirming_plan`
-- Plan 必須透過 `wx.showModal` 取得用戶確認才可進入 `executing`
+- Plan 預設直接進入 `executing`（2026-10 修訂：UI plan 卡片已提供能見性，彈窗為高頻任務流噪音）
+- 若保留 checkpoint hook（見 § 8.2），Plan 仍可透過 `wx.showModal` 取得用戶確認才進入 `executing`
 - 失敗時**必須**呼叫 `rollbackIfNeeded()`，按反序撤銷已成功的 Task
 - Plan 摘要渲染：列出每個 Task 的 `skillId` + `action`，供用戶檢視
 
@@ -351,7 +356,7 @@ export const instance: SkillInstance = {
 - **並行執行**所有就緒的 Task（`Promise.all`）
 - **死鎖偵測**：`ready.length === 0 && running.size === 0` 時拋出 `Deadlock detected: no task can proceed`
 - `inputBindings` 解析：支援點號路徑（如 `data.userLocation.lat`）
-- 寫操作前先檢查 `requiresHumanConfirm`，若為 `true` 則進入 `waiting_human` 等待用戶確認
+- 寫操作前檢查 `requiresHumanConfirm`（預設 false）：若為 `true` 才進入 `waiting_human` 等待用戶確認（2026-10 修訂：預設自動執行，遵循「最小打擾」原則；安全网靠 rollback 機制 + AI 專屬卡銀行級密碼框 + 重置按鈕）
 
 ### 8.3 Planner（LLM 任務拆解）
 
@@ -393,7 +398,7 @@ export const instance: SkillInstance = {
 
 | 風險點 | 紅線要求 |
 |--------|---------|
-| LLM 幻覺導致錯誤下單 | 所有寫操作必須 `requiresHumanConfirm: true` |
+| LLM 幻覺導致錯誤下單 | 預設自動執行（2026-10 修訂：靠 rollback + AI 專屬卡銀行級密碼 + 重置按鈕三道防線）；支付 / 不可逆場景可手動啟用 `requiresHumanConfirm: true` 重啟確認彈窗 |
 | SKILL 越權呼叫 | 每個 SKILL 獨立鑒權，Agent 只持有呼叫令牌 |
 | 用戶隱私洩露 | Context **不跨會話持久化**，敏感欄位加密儲存 |
 | 支付金額異常 | 支付前強制展示明細，金額 > 閾值需二次確認 |
