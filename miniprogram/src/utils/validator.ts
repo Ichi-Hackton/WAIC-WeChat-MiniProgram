@@ -84,6 +84,12 @@ function validateAgainst(
   path: string,
   errors: ValidationError[],
 ): void {
+  // 可選屬性缺省（undefined）：跳過全部約束。JSON Schema 語義中「屬性缺席」
+  // 不觸發 enum/const/type 約束，必填性由父層 object 的 required 檢查承擔。
+  // （實測踩坑：LLM 對未提及的坐席正確地不編造 seatType，若此處不豁免，
+  // 缺省值會被誤判為「undefined 不在 enum」導致任務誤失敗）
+  if (value === undefined) return;
+
   // nullable
   if (value === null && schema.nullable) return;
 

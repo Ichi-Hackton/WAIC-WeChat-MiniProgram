@@ -70,18 +70,31 @@ const ALLOWED_TRANSITIONS: Readonly<Record<AgentState, ReadonlyArray<AgentState>
   failed: ['idle'],
 };
 
+/** Orchestrator 實例序號（模組級）：正常全生命週期僅 1 個實例，> 1 表示 runtime 被重建 */
+let ORCHESTRATOR_SEQ = 0;
+
+/**
+ * 模組級運行註冊表：當前仍有效的執行令牌集合（RUN_SEQ 遞增分配）。
+ *
+ * 設計考量：令牌探測閉包（isRunActive）跨 awaits 長時間存活（如 checkpoint
+ * 彈窗掛起數十秒），以模組級變數存取、閉包捕獲原始值 token，不經 this、
+ * 不受實例重建 / 環境重建影響，探測語義全程穩定。
+ *
+ * 生命週期：handle 接管 / reset 時 clear（= 舊輪失效的唯一語義）。
+ * 熱重載重建模組時，舊閉包引用舊 Set（令牌仍在其中 → 放行），且重建後
+ * 無人再對舊輪呼叫 reset，語義仍安全。
+ */
+const ACTIVE_RUNS = new Set<number>();
+let RUN_SEQ = 0;
+
 /** Orchestrator 單例（支援持續多輪對話） */
 export class Orchestrator {
   private state: AgentState = 'idle';
   private ctx: AgentContext;
   private currentPlan?: Plan;
   private options: OrchestratorOptions;
-  /**
-   * 執行令牌：每次 handle() / reset() 遞增。
-   * 在途 Scheduler 與 checkpoint 以此探測自身是否仍有效，
-   * 防止 reset 後 BUSY 守衛失效導致併發雙跑、交錯彈窗與重複下單。
-   */
-  private runToken = 0;
+  /** 實例序號（模組級遞增）：診斷「多 Orchestrator 實例」類問題用 */
+  private readonly instanceSeq = ++ORCHESTRATOR_SEQ;
 
   constructor(ctx: AgentContext, options: OrchestratorOptions) {
     this.ctx = ctx;
@@ -113,8 +126,12 @@ export class Orchestrator {
       };
     }
 
-    // 本輪執行令牌：reset() 或下一輪 handle() 會使其失效（宣告於 try 外，供 catch 判定）
-    const token = ++this.runToken;
+    // 本輪執行令牌（模組級註冊表）：接管即清除舊輪令牌（= 舊 run 失效事件）。
+    // 宣告於 try 外供 catch 判定；模組級設計理由見 ACTIVE_RUNS 註釋
+    const token = ++RUN_SEQ;
+    ACTIVE_RUNS.clear();
+    ACTIVE_RUNS.add(token);
+    logInfo(`[runToken] handle 註冊 #${token}（實例 #${this.instanceSeq}）`);
 
     try {
       // completed / failed 先合法歸位 idle（守衛表僅允許這兩態回到 idle）
@@ -136,8 +153,17 @@ export class Orchestrator {
       // availableSkills 由 core 層取註冊表後傳入（llm 層不得反向依賴 skills，§ 12.3）
       const planObj = await llmPlan(intent, this.ctx, SkillRegistry.listSlim());
       if (planObj.tasks.length === 0) {
-        // 狀態機歸位：同上（EMPTY_PLAN 為高頻路徑，LLM 對不支援意圖回空 tasks）
+        // 狀態機歸位：同上（空 tasks 為高頻路徑，LLM 對不支援意圖或缺參數回空 tasks）
         this.transition('idle');
+        // note = LLM 追問文案（如「請補充出行日期」）：引導用戶補充後重試，
+        // 區別於「無法識別」（EMPTY_PLAN）
+        if (planObj.note) {
+          return {
+            message: `${BRAND_AI_GENERATED_BY}：${planObj.note}`,
+            state: 'idle',
+            errorCode: 'NEEDS_INPUT',
+          };
+        }
         return {
           message: `${BRAND_AI_GENERATED_BY}：抱歉，我無法識別您的意圖。請換個說法。`,
           state: 'idle',
@@ -179,12 +205,20 @@ export class Orchestrator {
           ? () => Promise.resolve(true)
           : this.options.checkpoint,
         onTaskUpdate: (t) => this.handleTaskUpdate(t),
-        isRunActive: () => this.runToken === token,
+        // 模組級註冊表探測（設計理由見 ACTIVE_RUNS 註釋）：不讀 this.*，
+        // 探測閉包跨 awaits 長期存活的語義全程穩定。注意消費方語義：
+        // 本函數 true = 仍有效；scheduler 的 shouldAbort true = 應中止（相反）
+        isRunActive: () => {
+          if (ACTIVE_RUNS.has(token)) return true;
+          logWarn(`[runToken] run #${token} 已失效（reset 或新輪接管）`);
+          return false;
+        },
       });
       this.currentPlan = finalPlan;
 
-      // 執行期間被 reset（runToken 失效）：狀態已被 reset 歸位，不再轉移
-      if (this.runToken !== token) {
+      // 執行期間被 reset / 新輪接管（模組級註冊表探測，與 isRunActive 同源）：
+      // 狀態已被 reset 歸位，不再轉移
+      if (!ACTIVE_RUNS.has(token)) {
         logWarn('handle：執行期間被 reset，丟棄本輪後續流程');
         if (finalPlan.tasks.some((t) => t.status === 'succeeded')) {
           logWarn(
@@ -221,8 +255,8 @@ export class Orchestrator {
       };
     } catch (e) {
       logError('Orchestrator 異常', e);
-      // 異常發生時若已被 reset（runToken 失效）：狀態已歸位，不再轉移
-      if (this.runToken !== token) {
+      // 異常發生時若已被 reset / 新輪接管（模組級註冊表探測，同上）：狀態已歸位，不再轉移
+      if (!ACTIVE_RUNS.has(token)) {
         logWarn('handle：異常且執行期間被 reset，丟棄本輪後續流程');
         return {
           message: `${BRAND_AI_GENERATED_BY}：本輪任務已被重置中止。`,
@@ -257,8 +291,10 @@ export class Orchestrator {
 
   /** 重置（清空 Plan 但保留 ctx；强制通道，繞過轉移守衛） */
   reset(): void {
-    // 遞增令牌使在途 Scheduler / checkpoint 流程失效（防併發雙跑與交錯彈窗）
-    this.runToken += 1;
+    // 清空運行註冊表：在途 Scheduler / checkpoint 流程隨即失效
+    //（防併發雙跑與交錯彈窗；模組級設計理由見 ACTIVE_RUNS 註釋）
+    ACTIVE_RUNS.clear();
+    logWarn(`[runToken] reset：全部運行令牌已失效（實例 #${this.instanceSeq}）`);
     if (this.state !== 'idle' && this.state !== 'completed' && this.state !== 'failed') {
       logWarn(`reset() 從非終態 ${this.state} 強制歸位 idle（繞過轉移守衛）`);
     }

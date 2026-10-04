@@ -114,8 +114,11 @@ export async function run(plan: Plan, ctx: AgentContext, options: SchedulerOptio
     }
 
     // 3. 並行執行這一批 ready 任務
+    //    注意 shouldAbort 與 isRunActive 語義相反（true = 應中止 vs true = 仍有效），
+    //    連接處必須取反——歷史缺陷：曾直接傳 () => isRunActive()，導致
+    //    「run 一切正常時 checkpoint 點同意後必被誤判中止」（RUN_CANCELLED 100% 復現）
     await Promise.allSettled(
-      ready.map((t) => executeOne(t, plan, taskIndex, ctx, checkpoint, onUpdate, () => isRunActive())),
+      ready.map((t) => executeOne(t, plan, taskIndex, ctx, checkpoint, onUpdate, () => !isRunActive())),
     );
   }
 
@@ -177,7 +180,8 @@ async function executeOne(
       cascadeSkip(task.id, plan, taskIndex, onUpdate);
       return;
     }
-    // checkpoint 等待期間 runToken 可能已失效（用戶 reset），不得再執行寫操作
+    // checkpoint 等待期間 runToken 可能已失效（用戶 reset），不得再執行寫操作。
+    // shouldAbort 語義：true = 應中止（與 isRunActive 相反，見 run() L118 註釋）
     if (shouldAbort()) {
       failTask(task, plan, 'RUN_CANCELLED', '執行令牌已失效（run 被 reset）', onUpdate);
       cascadeSkip(task.id, plan, taskIndex, onUpdate);

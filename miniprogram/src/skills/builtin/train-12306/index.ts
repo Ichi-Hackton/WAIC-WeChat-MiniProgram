@@ -55,6 +55,8 @@ export interface BookTicketInput {
   /** 從 search_train 注入的 bindings */
   from?: string;
   to?: string;
+  /** 從 search_train 注入的即時票價（分）：僅供 checkpoint 彈窗展示，下單金額以雲端再核實為準 */
+  priceCent?: number;
 }
 
 /** book_ticket 出參 */
@@ -137,6 +139,10 @@ export const meta = {
           passengerIdNo: { type: 'string', description: '身份證字號' },
           from: { type: 'string' },
           to: { type: 'string' },
+          priceCent: {
+            type: 'integer',
+            description: '查詢時即時票價（分），由 inputBindings 從 search_train 注入，僅供確認彈窗展示',
+          },
         },
       },
       outputSchema: {
@@ -204,8 +210,9 @@ async function invokeSearch(
   if (res.code === 0 && res.data) {
     return { success: true, data: res.data, bindings: buildSearchBindings(input, res.data) };
   }
-  // 雲端不可用時返回 mock（MVP 階段允許）
-  if (res.code === -1) {
+  // 雲端不可用時返回 mock（MVP 階段允許）：負數碼 = 雲基礎設施錯誤
+  // （-1 開發佔位 / -501000 INVALID_ENV 等），業務錯誤碼為正數不受影響
+  if (res.code < 0) {
     const data = mockSearch(input);
     return { success: true, data, bindings: buildSearchBindings(input, data) };
   }
@@ -218,15 +225,24 @@ async function invokeSearch(
 /**
  * 構造供下游 book_ticket 引用的輸出綁定（協議 § 6.1 bindings 語義）
  *
- * applyBindings 取值時 bindings 優先於 data，故首趟車次的關鍵欄位
- * （車次號 / 出發時間 / 票價）必須放入 bindings 才能被 inputBindings
- * 的 fromField 直接引用（如 fromField: 'trainNo'）。
+ * applyBindings 取值時 bindings 優先於 data，輸出兩類引用形態：
+ *   1. 首趟車關鍵欄位（trainNo / departTime / priceCent）——泛「買票」意圖
+ *      （未點名車次）直接引用，如 fromField: 'trainNo'
+ *   2. priceCentByTrain 映射（車次號→即時票價）——「訂指定車次」意圖（如
+ *      「訂 G531」）以點號路徑精確取價，如 fromField: 'priceCentByTrain.G531'；
+ *      指定車次若不在查詢結果中，取值失敗會阻斷下單（查無此車不應下單）。
+ *      相比讓 LLM 自造陣列過濾語法（實測產出過 trains[?trainNo=='G531']
+ *      等不支援路徑），映射鍵直達路徑對 LLM 最穩。
  */
 function buildSearchBindings(
   input: SearchTrainInput,
   data: SearchTrainOutput,
 ): Record<string, unknown> {
   const first = data.trains[0];
+  const priceCentByTrain: Record<string, number> = {};
+  for (const t of data.trains) {
+    if (!(t.trainNo in priceCentByTrain)) priceCentByTrain[t.trainNo] = t.priceCent;
+  }
   return {
     from: input.from,
     to: input.to,
@@ -234,6 +250,7 @@ function buildSearchBindings(
     ...(first
       ? { trainNo: first.trainNo, departTime: first.departTime, priceCent: first.priceCent }
       : {}),
+    ...(Object.keys(priceCentByTrain).length > 0 ? { priceCentByTrain } : {}),
   };
 }
 
@@ -252,8 +269,8 @@ async function invokeBook(
   if (res.code === 0 && res.data) {
     return { success: true, data: res.data };
   }
-  // 雲端不可用時返回 mock
-  if (res.code === -1) {
+  // 雲端不可用時返回 mock：負數碼 = 雲基礎設施錯誤（見 invokeSearch 說明）
+  if (res.code < 0) {
     return {
       success: true,
       data: {

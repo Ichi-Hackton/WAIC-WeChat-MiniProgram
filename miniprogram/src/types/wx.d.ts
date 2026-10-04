@@ -143,12 +143,17 @@ declare const wx: {
   // 分享 / 觸發
   showShareMenu(opts?: { withShareTicket?: boolean }): void;
 
+  // 下拉刷新
+  stopPullDownRefresh(opts?: { complete?: () => void }): void;
+
   // 網路
   request(opts: {
     url: string;
     method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
     data?: unknown;
     header?: Record<string, string>;
+    /** 超時毫秒（僅開發直連本地服務使用，見 services/cloud.ts） */
+    timeout?: number;
     success?: (res: { statusCode: number; data: unknown }) => void;
     fail?: (err: unknown) => void;
   }): void;

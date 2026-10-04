@@ -30,6 +30,8 @@ export interface Plan {
   status: PlanStatus;
   /** Planner LLM 呼叫的 traceId（除錯用） */
   traceId?: string;
+  /** Planner 附注（tasks 為空時的追問文案，如「請補充出行日期」） */
+  note?: string;
 }
 
 /** Plan 確認對話框需要的渲染資料 */

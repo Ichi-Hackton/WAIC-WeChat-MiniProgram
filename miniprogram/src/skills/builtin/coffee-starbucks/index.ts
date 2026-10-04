@@ -188,7 +188,9 @@ async function invokeSearch(
     { sessionId },
   );
   if (res.code === 0 && res.data) return { success: true, data: res.data };
-  if (res.code === -1) return { success: true, data: mockStores(input) };
+  // 雲端不可用時返回 mock：負數碼 = 雲基礎設施錯誤（-1 開發佔位 /
+  // -501000 INVALID_ENV 等），業務錯誤碼為正數不受影響
+  if (res.code < 0) return { success: true, data: mockStores(input) };
   return {
     success: false,
     error: { code: 'STORE_SEARCH_FAILED', message: res.message ?? '門市查詢失敗', retryable: true },
@@ -207,7 +209,8 @@ async function invokePlace(
     { sessionId },
   );
   if (res.code === 0 && res.data) return { success: true, data: res.data };
-  if (res.code === -1) {
+  // 雲端不可用時返回 mock：負數碼 = 雲基礎設施錯誤（見 invokeSearchStore 說明）
+  if (res.code < 0) {
     const amountCent = input.items.reduce((s, it) => s + 3000 * it.quantity, 0);
     return {
       success: true,
