@@ -59,6 +59,28 @@ export function extractJson(rawText: string): unknown {
   throw new LLMParserError('找不到 JSON 結構', rawText);
 }
 
+/**
+ * 佔位符值檢測：LLM 對無法確定的參數偶爾輸出「<需要用戶提供出行日期>」
+ * 類佔位符而非追問（實測復現）。此類值流入 SKILL 會產生髒請求，
+ * 在解析層攔截：拋錯走 failed 提示用戶重新描述（Planner prompt 同步
+ * 引導「缺參數應追問」）。已被 inputBindings 覆蓋的鍵除外（值會被上游
+ * 任務輸出替換，佔位符無害）。
+ */
+/** Planner 輸出的單個任務（佔位符檢測用元素型別） */
+type PlannerTask = NonNullable<PlannerLLMOutput['tasks']>[number];
+
+function assertNoPlaceholder(task: PlannerTask, idx: number): void {
+  const t = task as { input?: Record<string, unknown>; inputBindings?: Record<string, unknown> };
+  if (!t.input) return;
+  for (const [key, value] of Object.entries(t.input)) {
+    if (key in (t.inputBindings ?? {})) continue; // 該鍵將被 binding 覆蓋
+    if (typeof value !== 'string') continue;
+    if (/^<[^<>]{0,40}>$/.test(value.trim()) || value === 'TBD' || value === 'null' || value === 'undefined') {
+      throw new LLMParserError(`task[${idx}].input.${key} 含佔位符值「${value}」——缺少必要參數時應追問用戶而非填佔位符`);
+    }
+  }
+}
+
 /** 驗證 Planner 輸出結構 */
 export function validatePlannerOutput(raw: unknown): PlannerLLMOutput {
   if (!raw || typeof raw !== 'object') {
@@ -82,6 +104,7 @@ export function validatePlannerOutput(raw: unknown): PlannerLLMOutput {
     if (!Array.isArray(t.dependsOn)) {
       throw new LLMParserError(`task[${i}] 缺少 dependsOn[]`);
     }
+    assertNoPlaceholder(o.tasks[i], i);
   }
   return o as PlannerLLMOutput;
 }
@@ -111,6 +134,8 @@ export function toPlan(llm: PlannerLLMOutput, intent: string, planId: string): P
     tasks,
     createdAt: Date.now(),
     status: 'draft',
+    // LLM 附注透傳：空 tasks 時的追問文案（orchestrator 據此提示用戶補充參數）
+    ...(llm.message ? { note: llm.message } : {}),
   };
 }
 

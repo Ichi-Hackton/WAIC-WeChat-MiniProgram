@@ -52,6 +52,42 @@ function upstreamFail(message: string): { httpStatus: number; body: { code: numb
 /** 上游 LLM 呼叫逾時上限（毫秒） */
 const UPSTREAM_TIMEOUT_MS = 30_000;
 
+/**
+ * GET /api/config — LLM 配置狀態查詢（脫敏）
+ *
+ * 供小程序端展示當前 LLM 接入狀態（供應商 / 模型 / 是否已配 Key），
+ * 絕不返回 API Key 本身；baseUrl 僅回 host（如 api.minimax.cn）。
+ */
+const handleConfig: RouteHandler = async () => {
+  const baseUrl = process.env.LLM_BASE_URL;
+  const apiKey = process.env.LLM_API_KEY;
+  const model = process.env.LLM_MODEL ?? 'deepseek-chat';
+  let host = '';
+  try {
+    host = baseUrl ? new URL(baseUrl).host : '';
+  } catch {
+    host = '';
+  }
+  // 供應商識別（僅供展示；未知 host 一律「自定義」）
+  const provider = !host
+    ? '未配置'
+    : host.includes('minimax')
+      ? 'MiniMax'
+      : host.includes('deepseek')
+        ? 'DeepSeek'
+        : host.includes('bigmodel')
+          ? '智譜 GLM'
+          : '自定義';
+  return ok({
+    llm: {
+      configured: Boolean(baseUrl && apiKey),
+      provider,
+      model,
+      baseUrl: host,
+    },
+  });
+};
+
 const handleChat: RouteHandler = async (body) => {
   const baseUrl = process.env.LLM_BASE_URL;
   const apiKey = process.env.LLM_API_KEY;
@@ -78,18 +114,41 @@ const handleChat: RouteHandler = async (body) => {
     ...(req.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
   };
 
+  // 供應商特有參數合併（LLM_EXTRA_BODY，JSON 字串）：如 MiniMax M3 的
+  // {"thinking":{"type":"disabled"}} 跳過思考降低延遲；解析失敗靜默忽略，
+  // 避免錯誤配置阻斷主鏈路
+  if (process.env.LLM_EXTRA_BODY) {
+    try {
+      Object.assign(payload, JSON.parse(process.env.LLM_EXTRA_BODY) as object);
+    } catch {
+      // 忽略非法 JSON 配置
+    }
+  }
+
   let upstream: Response;
-  try {
-    upstream = await fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
+  /** 執行上游呼叫（供 400 自適應重試複用） */
+  const doFetch = async (p: ChatCompletionRequest): Promise<Response> =>
+    fetch(`${baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${apiKey}`,
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(p),
       // 上游掛起時避免無界等待（Node 18+ 內建 AbortSignal.timeout）
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
+  try {
+    upstream = await doFetch(payload);
+    // 供應商相容自適應：部分供應商（如 MiniMax）不支援 OpenAI 的
+    // response_format 參數，收到 400 時去掉該參數重試一次——planner
+    // 輸出本就由 prompt 約束 + 小程序端 parser 正則抽取雙重保底，
+    // 不依賴服務端 JSON 模式
+    if (upstream.status === 400 && payload.response_format) {
+      const { response_format: _drop, ...rest } = payload;
+      void _drop;
+      upstream = await doFetch(rest);
+    }
   } catch (e) {
     const reason = e instanceof Error && e.name === 'TimeoutError' ? `上游逾時（${UPSTREAM_TIMEOUT_MS}ms）` : '';
     return upstreamFail(`LLM 上游連線失敗：${reason || (e instanceof Error ? e.message : String(e))}`);
@@ -101,9 +160,16 @@ const handleChat: RouteHandler = async (body) => {
   }
 
   const data = (await upstream.json().catch(() => null)) as ChatCompletionResponse | null;
-  const text = data?.choices?.[0]?.message?.content;
-  if (typeof text !== 'string') {
-    return upstreamFail('LLM 上游回應格式異常（缺少 choices[0].message.content）');
+  let text = data?.choices?.[0]?.message?.content;
+  // 剔除內嵌思考標籤：部分供應商（如 MiniMax M3 實測行為）將思考過程
+  // 以 <think>…</think> 直接內嵌 content（而非 reasoning_content 欄位），
+  // 且思考 token 計入 max_tokens——下游 planner 只需純正文，思考內容
+  // 流入解析會污染 JSON 抽取
+  if (typeof text === 'string') {
+    text = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+  }
+  if (typeof text !== 'string' || text === '') {
+    return upstreamFail('LLM 上游回應格式異常（缺少 choices[0].message.content 或內容全為思考過程）');
   }
 
   return ok({
@@ -119,4 +185,5 @@ const handleChat: RouteHandler = async (body) => {
 
 export const llmRoutes: Array<[string, RouteHandler]> = [
   ['POST /api/llm/chat', handleChat],
+  ['GET /api/config', handleConfig],
 ];

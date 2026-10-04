@@ -64,8 +64,10 @@ export async function callLLM(
       '/api/llm/chat',
       req,
       // postContainer 內建 3 次重試已關閉：重試統一收斂到本函數外層的
-      // 單層 retry，避免巢狀放大（3 × 3 = 9 次）拖慢開發環境降級路徑
-      { sessionId: req.sessionId, retry: false },
+      // 單層 retry，避免巢狀放大（3 × 3 = 9 次）拖慢開發環境降級路徑；
+      // timeoutMs 30s 與雲端上游逾時（llm-chat.ts UPSTREAM_TIMEOUT_MS）對齊，
+      // 避免真實 LLM 長回應被默認 15s 提前切斷
+      { sessionId: req.sessionId, retry: false, timeoutMs: 30_000 },
     );
     if (res.code !== 0 || !res.data) {
       const retryable = res.code === 429 || res.code === 503;

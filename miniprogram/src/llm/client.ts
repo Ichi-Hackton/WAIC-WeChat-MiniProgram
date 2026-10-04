@@ -10,6 +10,7 @@ import { callLLM, LLMError, type LLMMessage } from '../services/llm';
 import { CloudNetworkError, isDevEnv } from '../services/cloud';
 import { error as logError, info as logInfo, warn as logWarn } from '../utils/logger';
 import { genTraceId } from '../utils/idgen';
+import { applyPassengerSlot } from '../utils/passenger';
 import { buildPlannerPrompt } from './prompts/planner';
 import { parsePlannerOutput, toPlan, LLMParserError } from './parser';
 import { rulePlan } from './rule-planner';
@@ -40,6 +41,14 @@ function devFallbackReason(e: unknown): string | null {
   }
   if (e instanceof CloudNetworkError && isDevEnv()) {
     return '雲端 5xx / 網路失敗（重試耗盡）';
+  }
+  // 開發 / 體驗環境下的防禦性兜底：開發者工具對無效雲環境（INVALID_ENV）
+  // 的呼叫可能以 resolve 錯誤體形態穿透（HTTP 非 5xx、業務碼形態各異，
+  // 詳見 services/cloud.ts 的歸一說明），無法窮舉識別。dev 環境定位為
+  // 「全鏈路可演示」，任何 LLM 錯誤一律降級並記 warn；release 不受影響，
+  // 保留嚴格失敗語義（真實 LLM 故障不被規則規劃器靜默掩蓋）。
+  if (e instanceof LLMError && isDevEnv()) {
+    return `LLM 代理錯誤（${e.message.slice(0, 60)}）`;
   }
   return null;
 }
@@ -116,6 +125,14 @@ export async function plan(
 
   // 4. 兜底：若 LLM 沒填 intent，沿用用戶輸入
   if (!planObj.intent) planObj.intent = intent;
+
+  // 5. 兜底：乘車人槽位回填——LLM 已從上下文槽位「知道」乘車人，但實測
+  //    可能未寫入任務參數（彈窗缺 passengerName → 校驗失敗）。對話中已提供
+  //    且任務缺失時代碼級回填，與 prompt 規則 8 的寫入義務構成雙保險。
+  //    日誌不攜帶姓名 / 證號明文（隱私）
+  if (applyPassengerSlot(planObj, ctx.messages)) {
+    logInfo('乘車人槽位回填：book_ticket 任務缺乘車人，已以對話中已提供信息補齊');
+  }
   return planObj;
 }
 
