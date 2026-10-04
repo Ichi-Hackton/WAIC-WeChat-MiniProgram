@@ -4,7 +4,7 @@
  * 規範來源：.qoder/rules/Agent.md § 15
  *
  * 此檔案位於 src/ 層，為**純模組**（頂層不得呼叫 App/Page）：
- *   1. 註冊所有 SKILL（12306 / 星巴克 / AI 卡支付）
+ *   1. 註冊所有 SKILL（12306 / 星巴克 / 網購商城 / 生活預約 / AI 卡支付）
  *   2. 冪等初始化雲開發環境
  *   3. 建構 Orchestrator 並轉發狀態 / 任務 / 計劃事件供 UI 訂閱
  *   4. 暴露 handleIntent / resetAgent / getState 對外入口
@@ -24,12 +24,14 @@ import { SkillRegistry } from './skills/registry';
 import { instance as train12306 } from './skills/builtin/train-12306/index';
 import { instance as starbucks } from './skills/builtin/coffee-starbucks/index';
 import { instance as aiCard } from './skills/builtin/payment-aicard/index';
+import { instance as shoppingMall } from './skills/builtin/shopping-mall/index';
+import { instance as bookingCenter } from './skills/builtin/booking-center/index';
 import { Orchestrator } from './core/orchestrator';
 import { buildContext } from './core/context';
 import { confirmPlan, awaitCheckpoint } from './interaction/checkpoint';
-import { ensureCloudInit } from './services/cloud';
+import { ensureCloudInit, getContainer, isDevEnv, LOCAL_RUN_BASE } from './services/cloud';
 import { BRAND_NAME } from './types/brand';
-import { info as logInfo, error as logError } from './utils/logger';
+import { info as logInfo, error as logError, setRemoteSink } from './utils/logger';
 import { appendHistory } from './storage/session';
 import type { AgentResponse, AgentState } from './types/agent-state';
 import type { Plan } from './types/plan';
@@ -48,6 +50,14 @@ export interface AgentRuntimeEvents {
   onPlanUpdate?: (plan: Plan) => void;
 }
 
+/** LLM 接入狀態（GET /api/config 脫敏回應，供 UI 展示） */
+export interface LlmStatus {
+  configured: boolean;
+  provider: string;
+  model: string;
+  baseUrl: string;
+}
+
 /** Agent Runtime：由 miniprogram/app.ts 於 onLaunch 建構並注入 globalData */
 export interface AgentRuntime {
   /** 處理用戶意圖（語音已 STT 為文字） */
@@ -60,6 +70,8 @@ export interface AgentRuntime {
   getCurrentPlan(): Plan | undefined;
   /** 訂閱 runtime 事件；返回取消訂閱函數（頁面 onUnload 時呼叫） */
   subscribe(events: AgentRuntimeEvents): () => void;
+  /** 查詢 LLM 接入狀態（雲端 /api/config 脫敏回應；離線時拋錯由呼叫方兜底） */
+  getLlmStatus(): Promise<LlmStatus>;
 }
 
 /**
@@ -73,6 +85,8 @@ function ensureSkillsRegistered(): void {
   SkillRegistry.register(train12306);
   SkillRegistry.register(starbucks);
   SkillRegistry.register(aiCard);
+  SkillRegistry.register(shoppingMall);
+  SkillRegistry.register(bookingCenter);
 }
 
 /** Runtime 單例（重複呼叫 createAgentRuntime 返回同一實例） */
@@ -89,6 +103,23 @@ let runtimeSingleton: AgentRuntime | null = null;
  */
 export function createAgentRuntime(cloudEnv: string = CLOUD_ENV): AgentRuntime {
   if (runtimeSingleton) return runtimeSingleton;
+
+  // 開發環境注入日誌旁路 sink：logger 逐條上報本地雲托管 /api/dev-log
+  // 落盤（自動化驗證取證用，徹底繞開開發者工具 Console 面板
+  // 「Copy all messages 不可用 / OCR 轉錄漏行」的痛點）。
+  // 僅 develop / trial 安裝；release 恆不注入，wx.request 旁路不進正式鏈路。
+  // fire-and-forget：失敗靜默，日誌上報永不影響業務流程。
+  if (isDevEnv()) {
+    setRemoteSink((lv, msg) => {
+      const wxApi = (globalThis as { wx?: { request?: (o: Record<string, unknown>) => void } }).wx;
+      wxApi?.request?.({
+        url: `${LOCAL_RUN_BASE}/api/dev-log`,
+        method: 'POST',
+        data: { level: lv, msg: msg.slice(0, 2000), ts: Date.now() },
+        fail: () => undefined,
+      });
+    });
+  }
 
   // 啟動日誌精簡為「末尾單條就緒日誌」：品牌啟動訊息已由
   // miniprogram/app.ts 的 onLaunch 日誌承擔，此處不再重複輸出 banner
@@ -169,6 +200,18 @@ export function createAgentRuntime(cloudEnv: string = CLOUD_ENV): AgentRuntime {
       return () => {
         listeners.delete(events);
       };
+    },
+
+    /** 查詢 LLM 接入狀態（供首頁狀態列展示；失敗時由呼叫方顯示離線文案） */
+    async getLlmStatus(): Promise<LlmStatus> {
+      const res = await getContainer<{ llm: LlmStatus }>(cloudEnv, '/api/config', {
+        retry: false,
+        timeoutMs: 5_000,
+      });
+      if (res.code === 0 && res.data?.llm) {
+        return res.data.llm;
+      }
+      throw new Error(res.message ?? 'LLM 配置查詢失敗');
     },
   };
 

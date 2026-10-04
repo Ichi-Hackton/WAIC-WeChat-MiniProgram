@@ -1,357 +1,1009 @@
+/* ============================================================
+   MicroMate 首頁視覺系統 v4 —— 侘寂極簡 Wabi-Sabi Restraint
+
+   設計語言：借鑒 SK-II 日式極簡美學
+   - 米白紙感基底 + 深褐文字 + 暖金克制強調
+   - 襯線字標（Songti SC / Source Han Serif）+ 無襯線正文
+   - 1px hairline 暖灰邊線 + 極小圓角 + 幾乎無陰影
+   - 極慢緩動 cubic-bezier(0.25, 0.1, 0.25, 1) + 純淡入
+   - 去 emoji + 去 teal 漸變 + 去橙金強調
+   ============================================================ */
+
+/* ---------- 基礎 ---------- */
+
+page {
+  background: #F5F1E8;
+}
+
 .page {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background: #f7f8fa;
+  font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  color: #2B2018;
+  background: #F5F1E8;
 }
 
-/* 頂部品牌列 */
-.header {
+/* ============================================================
+   啟動載入畫面（splash）：米白底＋襯線字標＋水平細線展開
+   ============================================================ */
+
+.splash {
+  position: fixed;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: #F5F1E8;
+  transition: opacity 0.8s ease;
+}
+
+.splash-fade {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.splash-inner {
   display: flex;
   align-items: center;
-  padding: 24rpx 32rpx;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  color: #ffffff;
-  box-shadow: 0 2rpx 8rpx rgba(99, 102, 241, 0.2);
 }
 
-.brand {
-  font-size: 36rpx;
-  font-weight: 700;
-  letter-spacing: 2rpx;
+.splash-mark {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 92rpx;
+  font-weight: 400;
+  color: #2B2018;
+  letter-spacing: 0;
+  margin-right: 28rpx;
+  line-height: 1;
 }
 
-.tagline {
-  flex: 1;
-  margin-left: 16rpx;
+.splash-text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.splash-name {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 42rpx;
+  font-weight: 400;
+  color: #2B2018;
+  letter-spacing: 8rpx;
+  line-height: 1.2;
+}
+
+.splash-tagline {
+  margin-top: 10rpx;
   font-size: 22rpx;
-  opacity: 0.85;
+  color: #6B5D4A;
+  letter-spacing: 4rpx;
+  font-weight: 300;
 }
 
-.reset-btn {
-  padding: 8rpx 20rpx;
-  font-size: 22rpx;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 32rpx;
+/* 底部水平細線：從中心向兩端展開（1.5s） */
+.splash-line {
+  margin-top: 80rpx;
+  width: 240rpx;
+  height: 1rpx;
+  background: #8B7355;
+  transform-origin: center;
+  animation: lineExpand 1.5s cubic-bezier(0.25, 0.1, 0.25, 1) backwards;
 }
 
-/* 狀態列 */
+@keyframes lineExpand {
+  from { transform: scaleX(0); opacity: 0; }
+  to { transform: scaleX(1); opacity: 1; }
+}
+
+/* ============================================================
+   頂部狀態條（純文字標籤＋極簡重置）
+   ============================================================ */
+
 .status-bar {
   display: flex;
   align-items: center;
-  padding: 12rpx 32rpx;
-  background: #ffffff;
-  border-bottom: 1rpx solid #e5e7eb;
-  font-size: 22rpx;
+  padding: 20rpx 40rpx 16rpx;
 }
 
-.status-dot {
-  width: 12rpx;
-  height: 12rpx;
-  border-radius: 50%;
-  margin-right: 8rpx;
-}
-
-.dot-busy {
-  background: #6366f1;
-  animation: pulse 1.2s ease-in-out infinite;
-}
-
-.dot-ok {
-  background: #059669;
-}
-
-.dot-failed {
-  background: #dc2626;
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
-.status-label {
-  color: #6b7280;
-  margin-right: 8rpx;
-}
-
-.status-value {
-  margin-left: 8rpx;
-  padding: 2rpx 12rpx;
-  border-radius: 8rpx;
-  font-family: monospace;
-}
-
-.state-busy {
-  color: #6366f1;
-  background: #eef2ff;
-}
-
-.state-ok {
-  color: #059669;
-  background: #d1fae5;
-}
-
-.state-failed {
-  color: #dc2626;
-  background: #fee2e2;
-}
-
-/* 對話區 */
-.chat {
-  flex: 1;
-  padding: 24rpx 24rpx;
-  overflow-y: auto;
-}
-
-.bubble {
-  margin-bottom: 24rpx;
-  max-width: 80%;
-  padding: 16rpx 20rpx;
-  border-radius: 16rpx;
-  font-size: 28rpx;
-  line-height: 1.5;
-  word-wrap: break-word;
-}
-
-.bubble-user {
-  margin-left: auto;
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  color: #ffffff;
-  border-bottom-right-radius: 4rpx;
-}
-
-.bubble-assistant {
-  margin-right: auto;
-  background: #ffffff;
-  color: #1f2937;
-  border: 1rpx solid #e5e7eb;
-  border-bottom-left-radius: 4rpx;
-}
-
-.bubble-role {
-  font-size: 20rpx;
-  font-weight: 700;
-  margin-bottom: 6rpx;
-  opacity: 0.7;
-}
-
-.bubble-content {
-  white-space: pre-wrap;
-}
-
-/* 卡片 */
-.cards {
-  margin-top: 12rpx;
-  display: flex;
-  flex-direction: column;
-  gap: 8rpx;
-}
-
-.card {
-  padding: 12rpx 16rpx;
-  border-radius: 8rpx;
-  background: rgba(99, 102, 241, 0.08);
-  border-left: 4rpx solid #6366f1;
-}
-
-.card-plan {
-  border-left-color: #6366f1;
-}
-
-.card-result {
-  border-left-color: #059669;
-  background: rgba(5, 150, 105, 0.08);
-}
-
-.card-error {
-  border-left-color: #dc2626;
-  background: rgba(220, 38, 38, 0.08);
-}
-
-.card-head {
+.status-pill {
   display: flex;
   align-items: center;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 22rpx;
+  font-weight: 500;
+  letter-spacing: 2rpx;
+  padding: 0;
+  background: transparent;
+}
+
+.pill-busy { color: #8B7355; }
+.pill-ok { color: #5A7A4E; }
+.pill-failed { color: #A04A3C; }
+.pill-idle { color: #9A8B72; }
+
+.status-dot {
+  font-size: 22rpx;
+  margin-right: 8rpx;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.dot-busy { color: #8B7355; animation: breathe 2.4s ease-in-out infinite; }
+.dot-ok { color: #5A7A4E; }
+.dot-failed { color: #A04A3C; }
+.dot-idle { color: #9A8B72; }
+
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.llm-label {
+  flex: 1;
+  margin-left: 24rpx;
+  text-align: right;
+  color: #9A8B72;
+  font-size: 20rpx;
+  font-weight: 300;
+  letter-spacing: 1rpx;
+}
+
+.reset-btn {
+  flex-shrink: 0;
+  margin-left: 24rpx;
+  padding: 8rpx 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 22rpx;
+  color: #6B5D4A;
+  letter-spacing: 2rpx;
+  background: transparent;
+  border: none;
+  transition: opacity 0.25s ease;
+}
+
+.reset-btn:active {
+  opacity: 0.5;
+}
+
+/* ============================================================
+   對話區
+   ============================================================ */
+
+.chat {
+  flex: 1;
+  height: 0;
+  padding: 8rpx 40rpx 16rpx;
+  box-sizing: border-box;
+}
+
+.msg-user,
+.msg-ai {
+  animation: riseIn 0.6s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(12rpx);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 用戶訊息：右對齊文字 + 暖金左側細線引述塊 */
+.msg-user {
+  display: flex;
+  justify-content: flex-end;
+  margin: 24rpx 0 32rpx;
+}
+
+.user-bubble {
+  max-width: 76%;
+  padding: 14rpx 0 14rpx 24rpx;
+  border-left: 4rpx solid #8B7355;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 30rpx;
+  font-weight: 400;
+  line-height: 1.7;
+  word-break: break-word;
+  color: #2B2018;
+  background: transparent;
+}
+
+/* AI 訊息 */
+.msg-ai {
+  display: flex;
+  margin: 24rpx 0 36rpx;
+}
+
+.ai-avatar {
+  flex-shrink: 0;
+  width: 64rpx;
+  height: 64rpx;
+  border-radius: 50%;
+  background: #EFE9DD;
+  color: #2B2018;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 32rpx;
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 24rpx;
+  position: relative;
+  overflow: hidden;
+}
+
+/* loading 時：底部 1px 暖金細線緩慢循環位移 */
+.is-loading .ai-avatar::after {
+  content: '';
+  position: absolute;
+  left: 8rpx;
+  bottom: 6rpx;
+  width: 48rpx;
+  height: 1rpx;
+  background: linear-gradient(90deg, transparent, #8B7355, transparent);
+  animation: lineSlide 2s linear infinite;
+}
+
+@keyframes lineSlide {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+.ai-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-head {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12rpx;
+}
+
+.ai-name {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 22rpx;
+  font-weight: 500;
+  color: #6B5D4A;
+  margin-right: 14rpx;
+  letter-spacing: 2rpx;
+}
+
+.ai-tag {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 18rpx;
+  font-weight: 300;
+  color: #9A8B72;
+  letter-spacing: 1rpx;
+}
+
+.ai-content {
+  font-size: 28rpx;
+  line-height: 1.75;
+  color: #2B2018;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ============================================================
+   卡片容器
+   ============================================================ */
+
+.cards {
+  margin-top: 16rpx;
+  display: flex;
+  flex-direction: column;
+  gap: 20rpx;
+}
+
+/* ============================================================
+   交付卡基底（白卡＋hairline 暖灰邊＋極小圓角）
+   ============================================================ */
+
+.card-delivery {
+  background: #FCFAF5;
+  border: 1rpx solid #E8E0D0;
+  border-radius: 8rpx;
+  padding: 32rpx 36rpx;
+  overflow: hidden;
+  animation: riseIn 0.6s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.delivery-title {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 28rpx;
+  font-weight: 600;
+  color: #2B2018;
+  letter-spacing: 2rpx;
+}
+
+.order-head {
+  display: flex;
+  align-items: baseline;
+}
+
+.order-mark {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 28rpx;
+  font-weight: 400;
+  color: #8B7355;
+  margin-right: 12rpx;
+  line-height: 1;
+}
+
+/* ============================================================
+   車次交付卡
+   ============================================================ */
+
+.route-head {
+  display: flex;
+  align-items: baseline;
   justify-content: space-between;
 }
 
-.card-title {
+.route {
+  display: flex;
+  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+}
+
+.route-city {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 36rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 4rpx;
+}
+
+.route-mid {
+  display: flex;
+  align-items: center;
+  margin: 0 18rpx;
+  flex: 0 0 auto;
+}
+
+.route-line {
+  width: 32rpx;
+  height: 1rpx;
+  background: #C9BDA1;
+}
+
+.route-ico {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  margin: 0 8rpx;
+  font-size: 22rpx;
+  color: #6B5D4A;
+}
+
+/* 數據源標籤：純文字標籤 */
+.source-tag {
+  flex-shrink: 0;
+  margin-left: 16rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 18rpx;
+  font-weight: 400;
+  letter-spacing: 2rpx;
+}
+
+.source-real { color: #5A7A4E; }
+.source-mock { color: #9A8B72; }
+
+.route-sub {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  color: #9A8B72;
+  font-weight: 300;
+  letter-spacing: 1rpx;
+}
+
+.train-list {
+  margin-top: 16rpx;
+}
+
+.train-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 22rpx 0;
+  border-bottom: 1rpx solid #E8E0D0;
+}
+
+.train-row:last-child {
+  border-bottom: none;
+  padding-bottom: 8rpx;
+}
+
+.train-soldout {
+  opacity: 0.4;
+}
+
+.train-info {
+  min-width: 0;
+}
+
+.train-top {
+  display: flex;
+  align-items: baseline;
+}
+
+.train-no {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #2B2018;
+  letter-spacing: 2rpx;
+}
+
+.train-duration {
+  margin-left: 16rpx;
+  font-size: 20rpx;
+  color: #9A8B72;
+  font-weight: 300;
+}
+
+.train-time {
+  margin-top: 8rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 26rpx;
+  color: #2B2018;
+  font-weight: 400;
+  letter-spacing: 2rpx;
+}
+
+.train-remain {
+  display: inline-block;
+  margin-top: 10rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  color: #5A7A4E;
+  letter-spacing: 1rpx;
+}
+
+.remain-out {
+  color: #9A8B72;
+}
+
+.train-act {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  flex-shrink: 0;
+  margin-left: 20rpx;
+}
+
+.train-price {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 32rpx;
+  font-weight: 500;
+  color: #6B4E2A;
+  letter-spacing: 1rpx;
+}
+
+/* 快捷預訂 CTA：襯線文字 + 暖金色 + 尾部箭頭，hover 加深 */
+.book-btn {
+  margin-top: 14rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 24rpx;
+  font-weight: 500;
+  color: #8B7355;
+  letter-spacing: 2rpx;
+  background: transparent;
+  border: none;
+  padding: 4rpx 0;
+  transition: opacity 0.25s ease, color 0.25s ease;
+}
+
+.book-btn::after {
+  content: ' ▸';
+}
+
+.book-btn-off {
+  color: #9A8B72;
+}
+
+.book-btn-off::after {
+  content: '';
+}
+
+/* ============================================================
+   訂單交付卡（hairline 憑證區）
+   ============================================================ */
+
+.order-body {
+  margin-top: 20rpx;
+  padding-top: 18rpx;
+  border-top: 1rpx solid #E8E0D0;
+}
+
+.order-line {
+  display: flex;
+  align-items: baseline;
+  padding: 8rpx 0;
+}
+
+.order-label {
+  flex-shrink: 0;
+  width: 140rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 22rpx;
+  color: #9A8B72;
+  font-weight: 400;
+  letter-spacing: 2rpx;
+}
+
+.order-value {
   flex: 1;
   font-size: 24rpx;
-  color: #4338ca;
+  color: #2B2018;
+  word-break: break-all;
 }
 
-.card-skill {
+.order-highlight {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  color: #6B4E2A;
+  font-weight: 500;
+  font-size: 40rpx;
+  letter-spacing: 1rpx;
+}
+
+/* ============================================================
+   門市交付卡
+   ============================================================ */
+
+.store-list {
+  margin-top: 8rpx;
+}
+
+.store-row {
+  padding: 18rpx 0;
+  border-bottom: 1rpx solid #E8E0D0;
+}
+
+.store-row:last-child {
+  border-bottom: none;
+}
+
+.store-name {
+  display: flex;
+  align-items: baseline;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 1rpx;
+}
+
+.store-open {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 18rpx;
+  font-weight: 400;
+  letter-spacing: 2rpx;
+  background: transparent;
+  padding: 0;
+}
+
+.open-yes { color: #5A7A4E; }
+.open-no { color: #9A8B72; }
+
+.store-addr {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #6B5D4A;
+  line-height: 1.6;
+  font-weight: 300;
+}
+
+.store-dist {
+  color: #8B7355;
+}
+
+/* ============================================================
+   商品交付卡
+   ============================================================ */
+
+.product-kw {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  color: #9A8B72;
+  font-weight: 300;
+  letter-spacing: 1rpx;
+}
+
+.product-list {
+  margin-top: 14rpx;
+}
+
+.product-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 22rpx 0;
+  border-bottom: 1rpx solid #E8E0D0;
+}
+
+.product-row:last-child {
+  border-bottom: none;
+  padding-bottom: 8rpx;
+}
+
+.product-soldout {
+  opacity: 0.4;
+}
+
+.product-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.product-top {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.product-name {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 1rpx;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-rating {
+  margin-left: 14rpx;
+  flex-shrink: 0;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  color: #8A7048;
+  font-weight: 400;
+}
+
+.product-meta {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #9A8B72;
+  font-weight: 300;
+}
+
+/* ============================================================
+   預約服務交付卡
+   ============================================================ */
+
+.booking-list {
+  margin-top: 14rpx;
+}
+
+.booking-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 22rpx 0;
+  border-bottom: 1rpx solid #E8E0D0;
+}
+
+.booking-row:last-child {
+  border-bottom: none;
+  padding-bottom: 8rpx;
+}
+
+.booking-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.booking-name {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 1rpx;
+}
+
+.booking-meta {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  color: #9A8B72;
+  font-weight: 300;
+}
+
+.slot-row {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 14rpx;
+}
+
+/* 時段 chip：細描邊方框 + 襯線數字（去圓角去色塊） */
+.slot-chip {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  padding: 6rpx 16rpx;
+  font-size: 22rpx;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 1rpx;
+  background: transparent;
+  border-radius: 0;
+}
+
+.slot-chip + .slot-chip {
+  margin-left: 12rpx;
+}
+
+.slot-open {
+  color: #8B7355;
+  border: 1rpx solid #8B7355;
+}
+
+.slot-full {
+  color: #9A8B72;
+  border: 1rpx solid #C9BDA1;
+  text-decoration: line-through;
+}
+
+/* ============================================================
+   計劃步驟卡
+   ============================================================ */
+
+.plan-card {
+  background: #FCFAF5;
+  border: 1rpx solid #E8E0D0;
+  border-radius: 8rpx;
+  padding: 22rpx 28rpx;
+  display: flex;
+  align-items: center;
+  animation: riseIn 0.6s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.step-no {
+  flex-shrink: 0;
+  width: 52rpx;
+  height: 52rpx;
+  border: 1rpx solid #C9BDA1;
+  border-radius: 6rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 22rpx;
+  font-weight: 500;
+  margin-right: 20rpx;
+  color: #6B5D4A;
+}
+
+.step-running {
+  color: #8B7355;
+  border-color: #8B7355;
+}
+
+.step-waiting_human {
+  color: #8A7048;
+  border-color: #8A7048;
+}
+
+.step-succeeded {
+  color: #5A7A4E;
+  border-color: #5A7A4E;
+}
+
+.step-failed {
+  color: #A04A3C;
+  border-color: #A04A3C;
+}
+
+.step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-title {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 26rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 1rpx;
+}
+
+.step-skill {
   display: block;
   margin-top: 4rpx;
   font-size: 20rpx;
-  color: #6b7280;
-  font-family: monospace;
+  color: #9A8B72;
+  font-weight: 300;
+  letter-spacing: 1rpx;
 }
 
-.card-error-text {
+.step-error {
   display: block;
   margin-top: 4rpx;
   font-size: 20rpx;
-  color: #dc2626;
+  color: #A04A3C;
 }
 
-/* 任務進度徽章（隨 onTaskUpdate 即時變色） */
+/* 任務狀態徽章：純文字標籤，無背景色塊 */
 .task-badge {
   flex-shrink: 0;
-  margin-left: 12rpx;
-  padding: 2rpx 12rpx;
-  border-radius: 16rpx;
+  margin-left: 16rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
   font-size: 20rpx;
+  font-weight: 400;
+  letter-spacing: 2rpx;
+  background: transparent;
 }
 
-.task-pending {
-  color: #6b7280;
-  background: #f3f4f6;
-}
+.task-pending { color: #9A8B72; }
+.task-running { color: #8B7355; }
+.task-waiting_human { color: #8A7048; }
+.task-succeeded { color: #5A7A4E; }
+.task-failed { color: #A04A3C; }
+.task-skipped, .task-rolled_back { color: #9A8B72; }
 
-.task-running {
-  color: #6366f1;
-  background: #eef2ff;
-}
+/* ============================================================
+   Loading 氣泡
+   ============================================================ */
 
-.task-waiting_human {
-  color: #b45309;
-  background: #fef3c7;
-}
-
-.task-succeeded {
-  color: #059669;
-  background: #d1fae5;
-}
-
-.task-failed {
-  color: #dc2626;
-  background: #fee2e2;
-}
-
-.task-skipped,
-.task-rolled_back {
-  color: #9ca3af;
-  background: #f3f4f6;
-}
-
-/* loading 氣泡：階段文案 + 三點彈跳動畫 */
 .loading-line {
   display: flex;
   align-items: center;
+  color: #6B5D4A;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 26rpx;
+  font-weight: 400;
+  letter-spacing: 1rpx;
 }
 
 .dots {
   display: inline-flex;
   align-items: flex-end;
-  margin-left: 10rpx;
-  height: 24rpx;
+  margin-left: 12rpx;
+  height: 26rpx;
 }
 
+/* 打字點改為暖金細線段（去圓點） */
 .dots .dot {
-  width: 8rpx;
-  height: 8rpx;
-  margin-right: 6rpx;
-  border-radius: 50%;
-  background: #6366f1;
-  animation: bounce 1.2s ease-in-out infinite;
+  width: 16rpx;
+  height: 1rpx;
+  margin-right: 8rpx;
+  border-radius: 0;
+  background: #8B7355;
+  animation: lineSlide 2s linear infinite;
 }
 
 .dots .dot:nth-child(2) {
-  animation-delay: 0.15s;
-}
-
-.dots .dot:nth-child(3) {
   animation-delay: 0.3s;
 }
 
-@keyframes bounce {
-  0%,
-  60%,
-  100% {
-    transform: translateY(0);
-  }
-  30% {
-    transform: translateY(-10rpx);
-  }
+.dots .dot:nth-child(3) {
+  animation-delay: 0.6s;
 }
 
-/* 範例 */
+/* ============================================================
+   場景範例（細描邊方框 + 襯線暖灰字）
+   ============================================================ */
+
 .examples {
-  padding: 16rpx 32rpx;
-  background: #ffffff;
-  border-top: 1rpx solid #e5e7eb;
+  padding: 20rpx 40rpx 8rpx;
 }
 
 .examples-title {
   display: block;
-  font-size: 24rpx;
-  color: #6b7280;
-  margin-bottom: 12rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 22rpx;
+  color: #9A8B72;
+  font-weight: 400;
+  margin-bottom: 16rpx;
+  letter-spacing: 2rpx;
 }
 
 .example-chip {
-  display: inline-block;
-  margin-right: 12rpx;
-  margin-bottom: 8rpx;
-  padding: 10rpx 20rpx;
-  background: #eef2ff;
-  color: #4338ca;
-  border-radius: 24rpx;
+  display: inline-flex;
+  align-items: center;
+  margin: 0 12rpx 14rpx 0;
+  padding: 12rpx 24rpx;
+  background: transparent;
+  border: 1rpx solid #C9BDA1;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
   font-size: 24rpx;
+  font-weight: 400;
+  color: #6B5D4A;
+  letter-spacing: 1rpx;
+  border-radius: 4rpx;
+  animation: riseIn 0.6s cubic-bezier(0.25, 0.1, 0.25, 1) backwards;
+  transition: border-color 0.25s ease, color 0.25s ease;
 }
 
-/* 輸入列 */
+.example-chip:nth-child(2) { animation-delay: 0.08s; }
+.example-chip:nth-child(3) { animation-delay: 0.16s; }
+.example-chip:nth-child(4) { animation-delay: 0.24s; }
+.example-chip:nth-child(5) { animation-delay: 0.32s; }
+
+.example-chip:active {
+  border-color: #8B7355;
+  color: #8B7355;
+}
+
+.btn-hover {
+  transform: scale(0.96);
+  opacity: 0.85;
+}
+
+/* ============================================================
+   輸入區（底部 hairline + 細描邊圓鈕，去麥克風去圓膠囊）
+   ============================================================ */
+
 .input-bar {
+  padding: 16rpx 40rpx;
+  padding-bottom: calc(28rpx + env(safe-area-inset-bottom));
+}
+
+.input-shell {
   display: flex;
   align-items: center;
-  padding: 16rpx 24rpx;
-  background: #ffffff;
-  border-top: 1rpx solid #e5e7eb;
-  padding-bottom: calc(16rpx + env(safe-area-inset-bottom));
-}
-
-.mic-btn {
-  width: 72rpx;
-  height: 72rpx;
-  line-height: 72rpx;
-  text-align: center;
-  font-size: 36rpx;
-  background: #f3f4f6;
-  border-radius: 36rpx;
-  margin-right: 12rpx;
+  padding: 8rpx 0;
+  background: transparent;
+  border: none;
+  border-top: 1rpx solid #C9BDA1;
+  border-radius: 0;
 }
 
 .input {
   flex: 1;
   height: 72rpx;
-  padding: 0 20rpx;
-  background: #f3f4f6;
-  border-radius: 36rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
   font-size: 28rpx;
+  font-weight: 400;
+  color: #2B2018;
+  letter-spacing: 1rpx;
+}
+
+.input-ph {
+  color: #9A8B72;
+  font-style: italic;
+  font-weight: 300;
 }
 
 .send-btn {
-  margin-left: 12rpx;
-  padding: 0 28rpx;
-  height: 72rpx;
-  line-height: 72rpx;
-  background: #e5e7eb;
-  color: #9ca3af;
-  border-radius: 36rpx;
+  flex-shrink: 0;
+  margin-left: 20rpx;
+  width: 68rpx;
+  height: 68rpx;
+  border: 1rpx solid #C9BDA1;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: #9A8B72;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
   font-size: 28rpx;
-  font-weight: 600;
+  font-weight: 500;
+  transition: border-color 0.3s ease, color 0.3s ease;
 }
 
 .send-btn-active {
-  background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
-  color: #ffffff;
+  border-color: #8B7355;
+  color: #8B7355;
 }
 
 .send-btn-disabled {
