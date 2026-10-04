@@ -11,19 +11,27 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { appendFileSync, mkdirSync, statSync } from 'node:fs';
 import type { CloudResponse, RequestContext, RouteHandler } from './api';
 import { llmRoutes } from './llm-chat';
 import { trainRoutes } from './skill-train';
 import { coffeeRoutes } from './skill-coffee';
+import { shoppingRoutes } from './skill-shopping';
+import { bookingRoutes } from './skill-booking';
 
 /** 請求 body 大小上限（位元組） */
 const MAX_BODY_BYTES = 1024 * 1024;
+
+/** dev-log 落盤檔案大小上限（50MB，超出即跳過寫入，防無界增長耗盡容器磁碟） */
+const MAX_DEV_LOG_BYTES = 50 * 1024 * 1024;
 
 /** 路由表：key = `METHOD /path`，各模組以 entries 陣列貢獻路由 */
 const routes = new Map<string, RouteHandler>([
   ...llmRoutes,
   ...trainRoutes,
   ...coffeeRoutes,
+  ...shoppingRoutes,
+  ...bookingRoutes,
 ]);
 
 /** 雲端日誌（stdout，由雲托管日誌系統收集） */
@@ -88,6 +96,45 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       message: 'ok',
       data: { service: 'micromate-cloudrun', time: Date.now() },
     });
+    return;
+  }
+
+  // ---- 開發驗證用：小程序端日誌旁路落盤 ----
+  // 小程序端 logger 經 wx.request 逐條上報（僅 develop / trial 環境安裝
+  // sink，見 miniprogram/src/app.ts），落盤 logs/dev-log.txt 供自動化
+  // 驗證取證——徹底繞開開發者工具 Console 面板「Copy all messages
+  // 不可用 / OCR 轉錄漏行」的痛點。
+  //
+  // 安全門控（生產容器不啟用）：ENABLE_DEV_LOG 未設 '1' 時按 404 處理，
+  // 端點在生產暴露面內不存在（否則無鑑權寫入可被高頻灌入耗盡磁碟/IO）；
+  // 本地 dev-start.ps1 啟動時自動注入該變數。容量保護：檔案超過 50MB
+  // 跳過寫入。同步寫入僅限本地驗證量級（每輪數十條，可接受）；單條
+  // msg 截 2000 字元 + 剝離換行（防日誌注入，客戶端已處理一次，雙保險）。
+  if (method === 'POST' && url === '/api/dev-log') {
+    if (process.env.ENABLE_DEV_LOG !== '1') {
+      sendJson(res, 404, { code: 404, message: `無此路由：${method} ${url}` });
+      return;
+    }
+    try {
+      const body = (await readBody(req)) as { level?: unknown; msg?: unknown; ts?: unknown } | undefined;
+      const ts = typeof body?.ts === 'number' ? body.ts : Date.now();
+      const level = String(body?.level ?? 'info').slice(0, 8);
+      const msg = String(body?.msg ?? '').replace(/[\r\n]+/g, ' ').slice(0, 2000);
+      mkdirSync('logs', { recursive: true });
+      let sizeOk = true;
+      try {
+        sizeOk = statSync('logs/dev-log.txt').size < MAX_DEV_LOG_BYTES;
+      } catch {
+        sizeOk = true; // 檔案尚不存在，視為可寫
+      }
+      if (sizeOk) {
+        appendFileSync('logs/dev-log.txt', `${new Date(ts).toISOString()} [${level}] ${msg}\n`, 'utf8');
+      }
+      sendJson(res, 200, { code: 0, message: 'ok' });
+    } catch {
+      // 取證端點失敗不回 5xx：客戶端 fire-and-forget，靜默即可
+      sendJson(res, 200, { code: 0, message: 'dev-log write failed (ignored)' });
+    }
     return;
   }
 
