@@ -8,19 +8,21 @@
  *   POST /api/skill/skill.booking.center/list_reservations
  *   POST /api/skill/skill.booking.center/cancel_reservation
  *
- * 資料來源：MVP 階段為確定性演示服務目錄（運動場館 / 醫療健康 /
- * 生活服務），正式版替換為各商家開放平台（協議不變，僅內部實作）。
+ * 2026-10 真實渠道上線：預約改為「跳轉模式」——美團等預約平台開放 API
+ * 僅面向企業資質 ISV（個人不可得），故：服務目錄保留為演示性輔助
+ * （幫意圖理解與需求歸納，真實商家與時段以美團為準，卡片明示）；
+ * create_reservation 生成 pending_external 跳轉訂單（預約需求卡 +
+ * 美團小程序跳轉 + 需求文本複製），真實預約與支付在美團側完成。
+ * 預約單落庫 MySQL（db.ts，重啟不丟），以 x-wx-openid 歸屬鑒權。
  *
- * 時段生成為「確定性偽隨機」（djb2 雜湊 seed = 服務+日期+時段）：
- * 雲端與小程序端 mock 降級共用同一算法約定，離線演示與自動化驗證
- * 均可復現；已預約時段即時從可約列表剔除。
- *
- * 預約單存於記憶體 Map（重啟丟失，正式版應落庫），以 x-wx-openid
- * 歸屬鑒權（規範 § 10）。
+ * 時段表改為純確定性演示（不再剔除「已預約」時段——真實時段在美團
+ * 側，本地剔除反而誤導；演示目錄僅供選擇參考）。
  */
 
 import type { RouteHandler } from './api';
 import { ok, fail, badRequest, unauthorized, forbidden } from './api';
+import { createOrder, getOrder, cancelOrder, listOrders } from './db';
+import { buildJump } from './external-jump';
 
 /** 演示服務目錄（確定性：離線演示與自動化驗證可復現） */
 interface ServiceDef {
@@ -59,38 +61,14 @@ function slotNaturallyOpen(serviceId: string, date: string, time: string): boole
   return hashStr(`${serviceId}|${date}|${time}`) % 4 !== 0;
 }
 
-/** 記憶體預約單表（owner 用於歸屬鑒權與清單過濾） */
-interface ReservationRecord extends ServiceDef {
-  reservationId: string;
-  date: string;
-  startTime: string;
-  endTime: string;
-  contactName: string;
-  contactPhone: string;
-  owner: string;
-  createdAt: number;
-}
-
-const reservations = new Map<string, ReservationRecord>();
-
-/** 該服務該日已被預約（任何人）的起始時刻集合 */
-function bookedTimes(serviceId: string, date: string): Set<string> {
-  const taken = new Set<string>();
-  for (const r of reservations.values()) {
-    if (r.serviceId === serviceId && r.date === date) taken.add(r.startTime);
-  }
-  return taken;
-}
-
-/** 生成某服務某日的可約時段（天然開放 ∖ 已被預約） */
+/** 生成某服務某日的演示時段（純確定性，真實時段以美團為準；見檔頭） */
 function slotsFor(serviceId: string, date: string): Array<{ startAt: string; startTime: string; available: boolean }> {
-  const taken = bookedTimes(serviceId, date);
   const slots = SLOT_TIMES.map((time) => ({
     startAt: `${date}T${time}`,
     startTime: time,
-    available: slotNaturallyOpen(serviceId, date, time) && !taken.has(time),
+    available: slotNaturallyOpen(serviceId, date, time),
   }));
-  // 保底：若確定性雜湊恰好全滿，強制開放最後一檔，保證演示鏈路永遠有位可約
+  // 保底：若確定性雜湊恰好全滿，強制開放最後一檔，保證演示目錄永遠有參考時段
   if (!slots.some((s) => s.available)) {
     slots[slots.length - 1].available = true;
   }
@@ -157,7 +135,8 @@ const handleSearchServices: RouteHandler = async (body) => {
     if (first) firstAvailableStartTimeByService[s.serviceId] = first.startTime;
   }
 
-  return ok({ date, services, priceCentByService, firstAvailableStartTimeByService });
+  // source 明示演示目錄（真實渠道模式下目錄僅為輔助參考，真實商家以美團為準）
+  return ok({ date, services, priceCentByService, firstAvailableStartTimeByService, source: 'demo' });
 };
 
 interface CreateReservationInput {
@@ -185,43 +164,52 @@ const handleCreateReservation: RouteHandler = async (body, ctx) => {
     return fail(404, `服務不存在：${input.serviceId}`);
   }
 
-  // 時段校驗：以確定性算法重算該日可約列表（與 search 結果一致）
-  const slot = slotsFor(input.serviceId, input.date).find((s) => s.startTime === input.startTime);
-  if (!slot || !slot.available) {
-    return fail(409, `該時段不可約：${input.date} ${input.startTime}，請改約其他時段`);
-  }
-  // 重複預約防護：同人同服務同日同時段只允許一單
-  for (const r of reservations.values()) {
-    if (r.owner === ctx.openid && r.serviceId === input.serviceId && r.date === input.date && r.startTime === input.startTime) {
-      return fail(409, `你已預約過此時段（預約號 ${r.reservationId}），請勿重複預約`);
-    }
-  }
-
+  /*
+   * 跳轉模式：時段目錄為演示性參考（真實時段在美團側），不再做本地
+   * 時段開放 / 重複預約校驗；生成預約需求卡訂單（pending_external），
+   * 真實預約與支付在美團小程序側完成。
+   */
   const reservationId = `rsv_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-  const record: ReservationRecord = {
-    ...def,
-    reservationId,
-    date: input.date,
-    startTime: input.startTime,
-    endTime: addMinutes(input.startTime, def.durationMin),
-    contactName: input.contactName?.trim() || '現場登記',
-    contactPhone: input.contactPhone?.trim() || '-',
+  const contactName = input.contactName?.trim() || '現場登記';
+  const contactPhone = input.contactPhone?.trim() || '-';
+  const endTime = addMinutes(input.startTime, def.durationMin);
+  const copyText = [
+    `預約 ${def.name}（${def.provider}）`,
+    `${input.date} ${input.startTime}-${endTime}`,
+    `地址 ${def.address}`,
+    `聯繫人 ${contactName}，電話 ${contactPhone}`,
+  ].join('\n');
+  await createOrder({
+    orderId: reservationId,
     owner: ctx.openid,
+    domain: 'booking',
+    status: 'pending_external',
+    payload: {
+      serviceId: def.serviceId,
+      name: def.name,
+      provider: def.provider,
+      address: def.address,
+      date: input.date,
+      startTime: input.startTime,
+      endTime,
+      contactName,
+      contactPhone,
+    },
     createdAt: Date.now(),
-  };
-  reservations.set(reservationId, record);
+  });
 
   return ok({
     reservationId,
-    serviceId: record.serviceId,
-    name: record.name,
-    provider: record.provider,
-    address: record.address,
-    date: record.date,
-    startTime: record.startTime,
-    endTime: record.endTime,
-    contactName: record.contactName,
-    status: 'confirmed',
+    serviceId: def.serviceId,
+    name: def.name,
+    provider: def.provider,
+    address: def.address,
+    date: input.date,
+    startTime: input.startTime,
+    endTime,
+    contactName,
+    status: 'pending_external',
+    jump: buildJump('meituan', copyText),
   });
 };
 
@@ -238,14 +226,14 @@ const handleCancel: RouteHandler = async (body, ctx) => {
   if (!ctx.openid) {
     return unauthorized('缺少調用方身份（x-wx-openid），拒絕取消');
   }
-  const r = reservations.get(input.reservationId);
-  if (!r) {
+  const r = await getOrder(input.reservationId);
+  if (!r || r.domain !== 'booking') {
     return fail(404, `預約單不存在或已取消：${input.reservationId}`);
   }
-  if (r.owner !== ctx.openid) {
+  const result = await cancelOrder(input.reservationId, ctx.openid);
+  if (result === 'forbidden') {
     return forbidden('無權取消他人預約');
   }
-  reservations.delete(input.reservationId);
   return ok({ ok: true, reservationId: input.reservationId });
 };
 
@@ -253,21 +241,27 @@ const handleListReservations: RouteHandler = async (_body, ctx) => {
   if (!ctx.openid) {
     return unauthorized('缺少調用方身份（x-wx-openid），拒絕查詢');
   }
-  const list = Array.from(reservations.values())
-    .filter((r) => r.owner === ctx.openid)
-    .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime))
-    .map((r) => ({
-      reservationId: r.reservationId,
-      serviceId: r.serviceId,
-      name: r.name,
-      provider: r.provider,
-      address: r.address,
-      date: r.date,
-      startTime: r.startTime,
-      endTime: r.endTime,
-      contactName: r.contactName,
-      status: 'confirmed' as const,
-    }));
+  const orders = await listOrders(ctx.openid, 'booking');
+  const list = orders
+    .map((o) => {
+      const p = o.payload as {
+        serviceId?: string; name?: string; provider?: string; address?: string;
+        date?: string; startTime?: string; endTime?: string; contactName?: string;
+      };
+      return {
+        reservationId: o.orderId,
+        serviceId: p.serviceId ?? '',
+        name: p.name ?? '',
+        provider: p.provider ?? '',
+        address: p.address ?? '',
+        date: p.date ?? '',
+        startTime: p.startTime ?? '',
+        endTime: p.endTime ?? '',
+        contactName: p.contactName ?? '-',
+        status: o.status,
+      };
+    })
+    .sort((a, b) => (a.date + a.startTime).localeCompare(b.date + b.startTime));
   return ok({ reservations: list });
 };
 

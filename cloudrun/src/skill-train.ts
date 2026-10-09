@@ -5,6 +5,7 @@
  *   POST /api/skill/skill.train.12306/search_train
  *   POST /api/skill/skill.train.12306/book_ticket
  *   POST /api/skill/skill.train.12306/book_ticket/cancel
+ *   POST /api/skill/skill.train.12306/book_ticket/complete
  *
  * 資料來源（分層降級，端點協議不變）：
  *   1. 真實數據：MCP_12306_URL 已配置時，經 12306-mcp（Joooook/12306-MCP，
@@ -16,14 +17,17 @@
  *   失敗（HTTP 200 + 非 0 code），**不**降級模擬——避免對不存在的線路
  *   展示假數據誤導用戶
  *
- * 訂單存於記憶體 Map：容器重啟後丟失、多實例不共享（MVP 可接受，正式版應落庫）。
- * 下單/取消屬模擬閉環：12306-mcp 為只讀查詢服務（無下單能力），真實購票
- * 需對接官方或聚合商渠道，屆時僅替換本模組內部實作。
+ * 2026-10 真實渠道上線：下單改為「跳轉模式」——12306 官方未開放個人購票
+ * API，book_ticket 生成 pending_external 跳轉訂單（含真實票價的購票資訊
+ * 卡 + 12306 官方小程序跳轉），真實下單與支付在官方側完成。訂單落庫
+ * MySQL（db.ts，重啟不丟），rollback/cancel 語義為「放棄購買」。
  */
 
 import type { RouteHandler } from './api';
 import { ok, fail, badRequest, unauthorized, forbidden } from './api';
 import { callMcpTool, McpToolError } from './mcp-client';
+import { createOrder, getOrder, cancelOrder, completeOrder } from './db';
+import { buildJump } from './external-jump';
 
 /** 座位類型 → 票價（分），與 SKILL meta 的 seatType 枚舉對齊 */
 const SEAT_PRICE_CENT: Record<string, number> = {
@@ -33,8 +37,7 @@ const SEAT_PRICE_CENT: Record<string, number> = {
   hard_seat: 40100,
 };
 
-/** 記憶體訂單表（MVP：重啟丟失、實例間不共享，見檔頭說明；owner 用於歸屬鑒權） */
-const orders = new Map<string, { trainNo: string; date: string; amountCent: number; owner: string; createdAt: number }>();
+
 
 /** 簡易確定性字串雜湊（生成穩定的餘票數，同一入參恆得同一結果） */
 function stableHash(s: string): number {
@@ -230,6 +233,14 @@ const handleSearch: RouteHandler = async (body) => {
   return ok({ from: input.from, to: input.to, date: input.date, trains, source: 'mock_deterministic' });
 };
 
+/** 協議席別枚舉 → 中文名（copyText 展示用，與 SEAT_TYPE_TO_NAMES 對齊） */
+const SEAT_TYPE_LABEL: Record<string, string> = {
+  business: '商務座',
+  first_class: '一等座',
+  second_class: '二等座',
+  hard_seat: '硬座',
+};
+
 interface BookTicketInput {
   trainNo?: string;
   date?: string;
@@ -280,12 +291,34 @@ const handleBook: RouteHandler = async (body, ctx) => {
       console.error('[skill-train] 下單真實票價查詢失敗，回退靜態價目表：', e instanceof Error ? e.message : e);
     }
   }
-  const orderId = `ord_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-  orders.set(orderId, {
-    trainNo: input.trainNo,
-    date: input.date,
-    amountCent,
+  /*
+   * 跳轉模式：生成購票資訊卡訂單（pending_external）。真實下單與支付在
+   * 12306 官方小程序側完成（官方未開放個人購票 API），本系統留存跳轉
+   * 記錄供行程頁重跳轉與歷史回溯。金額取上方核實的真實票價，僅作資訊
+   * 展示，實際以 12306 下單頁為準。
+   */
+  const orderId = `trn_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+  const seatLabel = SEAT_TYPE_LABEL[input.seatType] ?? input.seatType;
+  const copyText = [
+    `車次 ${input.trainNo}（${input.date}）`,
+    `${input.from ?? ''} → ${input.to ?? ''}`,
+    `${seatLabel} ¥${(amountCent / 100).toFixed(2)}`,
+    `乘車人 ${input.passengerName}`,
+  ].join('\n');
+  await createOrder({
+    orderId,
     owner: ctx.openid,
+    domain: 'train',
+    status: 'pending_external',
+    payload: {
+      trainNo: input.trainNo,
+      date: input.date,
+      seatType: input.seatType,
+      from: input.from,
+      to: input.to,
+      passengerName: input.passengerName,
+      amountCent,
+    },
     createdAt: Date.now(),
   });
 
@@ -293,8 +326,8 @@ const handleBook: RouteHandler = async (body, ctx) => {
     orderId,
     trainNo: input.trainNo,
     amountCent,
-    status: 'pending_payment',
-    payDeadline: Date.now() + 15 * 60 * 1000,
+    status: 'pending_external',
+    jump: buildJump('train_12306', copyText),
   });
 };
 
@@ -310,21 +343,50 @@ const handleCancel: RouteHandler = async (body, ctx) => {
   if (!ctx.openid) {
     return unauthorized('缺少調用方身份（x-wx-openid），拒絕取消');
   }
-  const order = orders.get(input.orderId);
-  if (!order) {
+  const order = await getOrder(input.orderId);
+  if (!order || order.domain !== 'train') {
     // 業務失敗（HTTP 200 + 非 0 code），SKILL rollback 會翻譯為異常
     return fail(404, `訂單不存在或已取消：${input.orderId}`);
   }
-  // 歸屬鑒權：僅訂單擁有者可取消（防 IDOR——枚舉 orderId 越權取消他人訂單）
-  if (order.owner !== ctx.openid) {
+  // 歸屬鑒權 + 取消（防 IDOR——枚舉 orderId 越權取消他人訂單）
+  const result = await cancelOrder(input.orderId, ctx.openid);
+  if (result === 'forbidden') {
     return forbidden('無權取消他人訂單');
   }
-  orders.delete(input.orderId);
   return ok({ ok: true, orderId: input.orderId });
+};
+
+/*
+ * 成交確認（2026-10 半屏跳轉 + 支付閉環）：用戶在 12306 官方側完成真實支付後，
+ * 回到行程頁點「標記已支付」將訂單歸檔為 completed。真實支付發生在渠道
+ * 收銀台（對方主體資質），本端點僅記錄用戶自證成交——漏斗最深可觀測點，
+ * 與埋點事件 order_confirmed 同步發生。已取消訂單不可再標記成交。
+ */
+const handleComplete: RouteHandler = async (body, ctx) => {
+  const input = (body ?? {}) as CancelInput;
+  if (!input.orderId) {
+    return badRequest('orderId 必填');
+  }
+  if (!ctx.openid) {
+    return unauthorized('缺少調用方身份（x-wx-openid），拒絕成交確認');
+  }
+  const order = await getOrder(input.orderId);
+  if (!order || order.domain !== 'train') {
+    return fail(404, `訂單不存在或已取消：${input.orderId}`);
+  }
+  if (order.status === 'cancelled') {
+    return fail(410, '訂單已取消，不可標記成交');
+  }
+  const result = await completeOrder(input.orderId, ctx.openid);
+  if (result === 'forbidden') {
+    return forbidden('無權確認他人訂單');
+  }
+  return ok({ ok: true, orderId: input.orderId, status: 'completed' });
 };
 
 export const trainRoutes: Array<[string, RouteHandler]> = [
   ['POST /api/skill/skill.train.12306/search_train', handleSearch],
   ['POST /api/skill/skill.train.12306/book_ticket', handleBook],
   ['POST /api/skill/skill.train.12306/book_ticket/cancel', handleCancel],
+  ['POST /api/skill/skill.train.12306/book_ticket/complete', handleComplete],
 ];

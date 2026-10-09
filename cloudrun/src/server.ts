@@ -6,18 +6,33 @@
  *   2. JSON body 解析（上限 1MB）
  *   3. 路由分發（路由表由各 handler 模組以 entries 形式註冊）
  *   4. 健康檢查（GET / 與 /healthz，供雲托管探活）
+ *   5. 訂單持久化初始化（db.ts：MySQL 落庫，失敗降級記憶體不阻斷）
+ *   6. 可選拉起 12306-MCP 子進程（START_MCP_12306=1，雲端真實餘票源）
  *
- * 零運行時依賴：僅使用 Node 內建模組（node:http），LLM 呼叫用 Node 18+ 內建 fetch。
+ * 2026-10 真實渠道上線：新增 mysql2 / 12306-mcp 兩項運行時依賴（見
+ * 計劃 §3.1 / §3.6），HTTP 層仍為零框架（僅 Node 內建模組）。
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { appendFileSync, mkdirSync, statSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { join } from 'node:path';
+import { initDb } from './db';
 import type { CloudResponse, RequestContext, RouteHandler } from './api';
+import { authRoutes } from './auth';
 import { llmRoutes } from './llm-chat';
+import { sttRoutes } from './stt';
+import { geoRoutes } from './geo';
 import { trainRoutes } from './skill-train';
+import { flightRoutes } from './skill-flight';
 import { coffeeRoutes } from './skill-coffee';
 import { shoppingRoutes } from './skill-shopping';
 import { bookingRoutes } from './skill-booking';
+import { weatherRoutes } from './skill-weather';
+import { ticketRoutes } from './skill-ticket';
+import { counselingRoutes } from './skill-counseling';
+import { tripShareRoutes } from './trip-share';
+import { metricsRoutes } from './metrics';
 
 /** 請求 body 大小上限（位元組） */
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -27,11 +42,20 @@ const MAX_DEV_LOG_BYTES = 50 * 1024 * 1024;
 
 /** 路由表：key = `METHOD /path`，各模組以 entries 陣列貢獻路由 */
 const routes = new Map<string, RouteHandler>([
+  ...authRoutes,
   ...llmRoutes,
+  ...sttRoutes,
+  ...geoRoutes,
   ...trainRoutes,
+  ...flightRoutes,
   ...coffeeRoutes,
   ...shoppingRoutes,
   ...bookingRoutes,
+  ...weatherRoutes,
+  ...ticketRoutes,
+  ...counselingRoutes,
+  ...tripShareRoutes,
+  ...metricsRoutes,
 ]);
 
 /** 雲端日誌（stdout，由雲托管日誌系統收集） */
@@ -170,6 +194,59 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 }
 
 const PORT = Number(process.env.PORT ?? 80);
+
+/*
+ * 12306-MCP 子進程（雲端真實餘票數據源，選配）
+ *
+ * START_MCP_12306=1 時以 child_process 拉起 node_modules/12306-mcp
+ * （埠 MCP_12306_PORT 預設 3001），並在 MCP_12306_URL 未顯式配置時
+ * 指向容器內實例。崩潰自動重啟（上限 3 次，跨過官網風控窗口）；
+ * 持續不可用時 skill-train 查詢自動降級確定性模擬（既有分層不變）。
+ *
+ * 本地開發不走本路徑（mcp-start.ps1 獨立管理，含補丁與協議探活）；
+ * 容器內補丁由 Dockerfile 構建期以 scripts/mcp-patch.mjs 應用。
+ */
+const MCP_PORT = Number(process.env.MCP_12306_PORT ?? 3001);
+
+function startMcp12306(): void {
+  if (!process.env.MCP_12306_URL) {
+    process.env.MCP_12306_URL = `http://127.0.0.1:${MCP_PORT}/mcp`;
+  }
+
+  const entry = join(process.cwd(), 'node_modules', '12306-mcp', 'build', 'index.js');
+  let restarts = 0;
+  const launch = (): ChildProcess => {
+    const child = spawn(process.execPath, [entry, '--port', String(MCP_PORT)], {
+      stdio: ['ignore', 'inherit', 'inherit'],
+      env: process.env,
+    });
+    log(`[mcp-12306] 子進程已拉起（pid=${child.pid ?? '?'}，埠 ${MCP_PORT}）`);
+    child.on('exit', (code) => {
+      // 正常退出（容器停機）不重啟；異常退出重啟最多 3 次
+      if (code !== null && code !== 0 && restarts < 3) {
+        restarts += 1;
+        log(`[mcp-12306] 子進程異常退出（code=${code}），30 秒後重啟（第 ${restarts}/3 次）`);
+        setTimeout(launch, 30_000);
+      } else if (code !== null && code !== 0) {
+        log('[mcp-12306] 重啟次數耗盡，火車票查詢將降級確定性模擬');
+      }
+    });
+    return child;
+  };
+
+  try {
+    statSync(entry);
+    launch();
+  } catch {
+    log('[mcp-12306] 未找到 12306-mcp 安裝（node_modules 缺失），跳過子進程，查詢降級模擬');
+  }
+}
+
 server.listen(PORT, () => {
   log(`MicroMate 雲托管服務已啟動，監聽埠 ${PORT}（路由數 ${routes.size}）`);
+  // 訂單持久化初始化（fire-and-forget：內部已處理降級與日誌，不阻斷服務）
+  void initDb();
+  if (process.env.START_MCP_12306 === '1') {
+    startMcp12306();
+  }
 });
