@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: cloudrun
+title: MicroMate 微信雲托管容器服務
+scope:
+    - cloudrun/
+source_files: []
+depends_on: []
+related_to: []

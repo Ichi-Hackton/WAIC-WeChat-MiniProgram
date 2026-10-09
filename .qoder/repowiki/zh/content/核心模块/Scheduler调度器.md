@@ -14,6 +14,12 @@
 - [app.ts](file://miniprogram/app.ts)
 </cite>
 
+## 更新摘要
+**已进行的更改**   
+- 更新了shouldAbort箭头函数语义修正的详细说明
+- 增强了任务执行流程中runToken失效检测的逻辑描述
+- 补充了历史缺陷修复的技术背景说明
+
 ## 目录
 1. [引言](#引言)
 2. [项目结构](#项目结构)
@@ -29,8 +35,10 @@
 ## 引言
 本技术文档聚焦于Scheduler调度器的实现原理与工程实践，围绕DAG任务调度引擎展开，涵盖依赖解析、拓扑执行轮次、并行执行策略、任务生命周期状态转换、人类确认检查点机制、资源管理与并发控制、与Orchestrator的协作和数据传递，以及性能优化建议与最佳实践。读者无需深入源码即可理解调度器如何驱动有向无环图（DAG）任务在小程序环境中安全、可观测、可回滚地执行。
 
+**最新更新**：修复了shouldAbort箭头函数语义问题，确保runToken失效检测逻辑的正确性，避免了"RUN_CANCELLED 100%复现"的历史缺陷。
+
 ## 项目结构
-Scheduler位于miniprogram/src/core下，是Agent运行时“编排层”的核心组件之一。其职责是将Planner产出的Plan（包含Task DAG）按依赖关系逐步调度执行，并在需要时通过Checkpoint机制请求人类确认，保证写操作的事务一致性。
+Scheduler位于miniprogram/src/core下，是Agent运行时"编排层"的核心组件之一。其职责是将Planner产出的Plan（包含Task DAG）按依赖关系逐步调度执行，并在需要时通过Checkpoint机制请求人类确认，保证写操作的事务一致性。
 
 ```mermaid
 graph TB
@@ -64,18 +72,18 @@ Interaction --> CheckpointType
 
 图表来源
 - [orchestrator.ts:1-340](file://miniprogram/src/core/orchestrator.ts#L1-L340)
-- [scheduler.ts:1-245](file://miniprogram/src/core/scheduler.ts#L1-L245)
+- [scheduler.ts:1-249](file://miniprogram/src/core/scheduler.ts#L1-L249)
 - [task.d.ts:1-59](file://miniprogram/src/types/task.d.ts#L1-L59)
-- [plan.d.ts:1-51](file://miniprogram/src/types/plan.d.ts#L1-L51)
+- [plan.d.ts:1-53](file://miniprogram/src/types/plan.d.ts#L1-L53)
 - [checkpoint.d.ts:1-44](file://miniprogram/src/types/checkpoint.d.ts#L1-L44)
 - [skill.d.ts:1-119](file://miniprogram/src/types/skill.d.ts#L1-L119)
 - [adapter.ts:1-115](file://miniprogram/src/skills/adapter.ts#L1-L115)
-- [binding.ts:1-50](file://miniprogram/src/utils/binding.ts#L1-L50)
+- [binding.ts:1-63](file://miniprogram/src/utils/binding.ts#L1-L63)
 - [checkpoint.ts:1-122](file://miniprogram/src/interaction/checkpoint.ts#L1-L122)
 
 章节来源
 - [orchestrator.ts:1-340](file://miniprogram/src/core/orchestrator.ts#L1-L340)
-- [scheduler.ts:1-245](file://miniprogram/src/core/scheduler.ts#L1-L245)
+- [scheduler.ts:1-249](file://miniprogram/src/core/scheduler.ts#L1-L249)
 
 ## 核心组件
 - Scheduler：负责DAG任务的依赖解析、逐轮调度、并行执行、失败级联跳过、死锁检测、人类确认序列化、runToken失效中止等。
@@ -85,10 +93,10 @@ Interaction --> CheckpointType
 - Checkpoint类型与交互实现：定义人类确认协议并提供UI弹窗实现。
 
 章节来源
-- [scheduler.ts:1-245](file://miniprogram/src/core/scheduler.ts#L1-L245)
+- [scheduler.ts:1-249](file://miniprogram/src/core/scheduler.ts#L1-L249)
 - [orchestrator.ts:1-340](file://miniprogram/src/core/orchestrator.ts#L1-L340)
 - [adapter.ts:1-115](file://miniprogram/src/skills/adapter.ts#L1-L115)
-- [binding.ts:1-50](file://miniprogram/src/utils/binding.ts#L1-L50)
+- [binding.ts:1-63](file://miniprogram/src/utils/binding.ts#L1-L63)
 - [checkpoint.d.ts:1-44](file://miniprogram/src/types/checkpoint.d.ts#L1-L44)
 - [checkpoint.ts:1-122](file://miniprogram/src/interaction/checkpoint.ts#L1-L122)
 
@@ -121,7 +129,7 @@ Orchestrator-->>User : 完成/失败结果
 
 图表来源
 - [orchestrator.ts:106-256](file://miniprogram/src/core/orchestrator.ts#L106-L256)
-- [scheduler.ts:77-128](file://miniprogram/src/core/scheduler.ts#L77-L128)
+- [scheduler.ts:77-131](file://miniprogram/src/core/scheduler.ts#L77-L131)
 - [adapter.ts:37-84](file://miniprogram/src/skills/adapter.ts#L37-L84)
 - [checkpoint.ts:49-64](file://miniprogram/src/interaction/checkpoint.ts#L49-L64)
 - [checkpoint.ts:110-122](file://miniprogram/src/interaction/checkpoint.ts#L110-L122)
@@ -130,13 +138,15 @@ Orchestrator-->>User : 完成/失败结果
 
 ### Scheduler调度器：DAG执行引擎
 - 依赖解析：每轮扫描所有pending任务，仅当dependsOn全部为succeeded时才视为ready。
-- 拓扑排序：不显式做全局拓扑排序，而是采用“逐轮就绪集合”的方式推进，天然满足拓扑顺序。
+- 拓扑排序：不显式做全局拓扑排序，而是采用"逐轮就绪集合"的方式推进，天然满足拓扑顺序。
 - 并行执行：对同一轮ready任务使用Promise.allSettled并行执行，互不阻塞。
 - 失败级联：任一任务失败或绑定解析失败，会将其所有未执行的下游标记为skipped。
 - 死锁检测：若本轮没有ready任务且仍有pending任务且无running/waiting_human任务，则抛出死锁异常。
 - 人类确认：对requiresHumanConfirm=true的能力，进入waiting_human状态，通过serializeCheckpoint串行化弹窗，避免wx.showModal覆盖导致确认丢失。
 - 运行令牌：isRunActive()用于探测当前轮是否仍有效，防止reset后继续执行或重复弹窗。
 - 计划终态：全部成功标记done，任一失败标记failed，并触发onComplete回调。
+
+**重要更新**：修复了shouldAbort箭头函数语义问题。在run()方法第121行，现在正确传递`() => !isRunActive()`作为shouldAbort参数，确保语义正确：shouldAbort返回true表示应中止，而isRunActive返回true表示仍有效。
 
 ```mermaid
 flowchart TD
@@ -151,16 +161,16 @@ Ready --> Deadlock{"ready.length === 0 ?"}
 Deadlock --> |是| CheckPending{"仍有 pending 且无 running/waiting_human ?"}
 CheckPending --> |是| Throw["抛出 SchedulerDeadlockError"]
 CheckPending --> |否| Break["跳出循环"]
-Deadlock --> |否| Parallel["Promise.allSettled(executeOne(...))"]
+Deadlock --> |否| Parallel["Promise.allSettled(executeOne(...))<br/>传入 shouldAbort = () => !isRunActive()"]
 Parallel --> Loop
 Break --> Finalize["plan.status = failed/ done<br/>onComplete(plan)"]
 Finalize --> End
 ```
 
 图表来源
-- [scheduler.ts:77-128](file://miniprogram/src/core/scheduler.ts#L77-L128)
-- [scheduler.ts:131-137](file://miniprogram/src/core/scheduler.ts#L131-L137)
-- [scheduler.ts:207-240](file://miniprogram/src/core/scheduler.ts#L207-L240)
+- [scheduler.ts:77-131](file://miniprogram/src/core/scheduler.ts#L77-L131)
+- [scheduler.ts:133-140](file://miniprogram/src/core/scheduler.ts#L133-L140)
+- [scheduler.ts:223-231](file://miniprogram/src/core/scheduler.ts#L223-L231)
 
 #### 任务执行流程（含Checkpoint）
 ```mermaid
@@ -180,22 +190,27 @@ C-->>S : false
 S->>S : failTask + cascadeSkip
 else 用户同意
 C-->>S : true
+S->>S : 检查 shouldAbort()
+alt shouldAbort() == true
+S->>S : failTask(RUN_CANCELLED) + cascadeSkip
+else shouldAbort() == false
 S->>A : invoke(skillId, action, resolvedInput, ctx)
 A-->>S : result(success/error)
 S->>S : 更新status/result/finishedAt
 S->>S : 失败则cascadeSkip
 end
+end
 ```
 
 图表来源
-- [scheduler.ts:139-204](file://miniprogram/src/core/scheduler.ts#L139-L204)
+- [scheduler.ts:142-208](file://miniprogram/src/core/scheduler.ts#L142-L208)
 - [scheduler.ts:64-74](file://miniprogram/src/core/scheduler.ts#L64-L74)
 - [checkpoint.ts:110-122](file://miniprogram/src/interaction/checkpoint.ts#L110-L122)
 - [adapter.ts:37-84](file://miniprogram/src/skills/adapter.ts#L37-L84)
 
 章节来源
-- [scheduler.ts:1-245](file://miniprogram/src/core/scheduler.ts#L1-L245)
-- [binding.ts:18-43](file://miniprogram/src/utils/binding.ts#L18-L43)
+- [scheduler.ts:1-249](file://miniprogram/src/core/scheduler.ts#L1-L249)
+- [binding.ts:28-56](file://miniprogram/src/utils/binding.ts#L28-L56)
 - [checkpoint.ts:110-122](file://miniprogram/src/interaction/checkpoint.ts#L110-L122)
 - [adapter.ts:37-84](file://miniprogram/src/skills/adapter.ts#L37-L84)
 
@@ -220,13 +235,13 @@ Pending --> Skipped : "上游失败级联"
 - [task.d.ts:12-19](file://miniprogram/src/types/task.d.ts#L12-L19)
 - [plan.d.ts:12-17](file://miniprogram/src/types/plan.d.ts#L12-L17)
 - [orchestrator.ts:60-71](file://miniprogram/src/core/orchestrator.ts#L60-L71)
-- [scheduler.ts:207-240](file://miniprogram/src/core/scheduler.ts#L207-L240)
+- [scheduler.ts:210-221](file://miniprogram/src/core/scheduler.ts#L210-L221)
 
 章节来源
 - [task.d.ts:12-19](file://miniprogram/src/types/task.d.ts#L12-L19)
 - [plan.d.ts:12-17](file://miniprogram/src/types/plan.d.ts#L12-L17)
 - [orchestrator.ts:60-71](file://miniprogram/src/core/orchestrator.ts#L60-L71)
-- [scheduler.ts:207-240](file://miniprogram/src/core/scheduler.ts#L207-L240)
+- [scheduler.ts:210-221](file://miniprogram/src/core/scheduler.ts#L210-L221)
 
 ### Checkpoint检查点机制：人类确认与事务一致性
 - 设计目标：确保写操作前必须获得用户明确同意，同时避免多个弹窗并发导致的确认丢失。
@@ -235,6 +250,8 @@ Pending --> Skipped : "上游失败级联"
 - 与Scheduler集成：当capability.requiresHumanConfirm=true时，任务先置为waiting_human，等待用户确认后继续执行；若拒绝或runToken失效，则failTask并级联跳过下游。
 - 事务一致性：失败路径由Orchestrator.rollbackIfNeeded按反序撤销已成功且reversible=true的任务，保证最终一致性。
 
+**重要更新**：修复了runToken失效检测逻辑。在executeOne函数中，checkpoint确认后现在正确检查shouldAbort()返回值，而不是直接调用isRunActive()。这确保了语义正确性：shouldAbort返回true表示应该中止任务执行。
+
 ```mermaid
 flowchart TD
 CapCheck{"capability.requiresHumanConfirm ?"}
@@ -242,6 +259,8 @@ Yes["task.status=waiting_human<br/>serializeCheckpoint(...)"]
 No["直接执行"]
 Confirm{"用户确认?"}
 Deny["failTask + cascadeSkip"]
+CheckAbort{"shouldAbort() ?"}
+Cancel["failTask(RUN_CANCELLED) + cascadeSkip"]
 Run["execute adapter.invoke(...)"]
 Success["task.status=succeeded"]
 Fail["task.status=failed + cascadeSkip"]
@@ -249,20 +268,22 @@ CapCheck --> |是| Yes
 CapCheck --> |否| No
 Yes --> Confirm
 Confirm --> |否| Deny
-Confirm --> |是| Run
+Confirm --> |是| CheckAbort
+CheckAbort --> |是| Cancel
+CheckAbort --> |否| Run
 Run --> Success
 Run --> Fail
 ```
 
 图表来源
-- [scheduler.ts:163-186](file://miniprogram/src/core/scheduler.ts#L163-L186)
+- [scheduler.ts:168-190](file://miniprogram/src/core/scheduler.ts#L168-L190)
 - [scheduler.ts:64-74](file://miniprogram/src/core/scheduler.ts#L64-L74)
 - [checkpoint.ts:110-122](file://miniprogram/src/interaction/checkpoint.ts#L110-L122)
 - [orchestrator.ts:278-303](file://miniprogram/src/core/orchestrator.ts#L278-L303)
 
 章节来源
 - [scheduler.ts:64-74](file://miniprogram/src/core/scheduler.ts#L64-L74)
-- [scheduler.ts:163-186](file://miniprogram/src/core/scheduler.ts#L163-L186)
+- [scheduler.ts:168-190](file://miniprogram/src/core/scheduler.ts#L168-L190)
 - [checkpoint.ts:110-122](file://miniprogram/src/interaction/checkpoint.ts#L110-L122)
 - [orchestrator.ts:278-303](file://miniprogram/src/core/orchestrator.ts#L278-L303)
 
@@ -273,7 +294,7 @@ Run --> Fail
 - 可扩展性：可通过扩展SchedulerOptions增加maxConcurrency参数，并在executeOne前加并发控制逻辑。
 
 章节来源
-- [scheduler.ts:117-119](file://miniprogram/src/core/scheduler.ts#L117-L119)
+- [scheduler.ts:116-122](file://miniprogram/src/core/scheduler.ts#L116-L122)
 - [scheduler.ts:64-74](file://miniprogram/src/core/scheduler.ts#L64-L74)
 - [orchestrator.ts:177-183](file://miniprogram/src/core/orchestrator.ts#L177-L183)
 
@@ -370,15 +391,16 @@ Adapter --> Registry["skills/registry"]
 - 绑定解析失败：inputBindings引用未完成或失败的上游任务，或字段路径不存在，需修正上游输出或绑定路径。
 - 用户取消：checkpoint拒绝或runToken失效会导致任务失败并级联跳过下游，需检查用户交互与重置逻辑。
 - 回滚失败：单个任务回滚失败仅记录错误并继续其余回滚，需检查对应SKILL的rollback实现。
+- **RUN_CANCELLED错误**：如果看到RUN_CANCELLED错误码，检查shouldAbort函数是否正确实现，确保isRunActive()返回false时shouldAbort()返回true。
 
 章节来源
-- [scheduler.ts:95-114](file://miniprogram/src/core/scheduler.ts#L95-L114)
-- [scheduler.ts:151-158](file://miniprogram/src/core/scheduler.ts#L151-L158)
-- [scheduler.ts:175-186](file://miniprogram/src/core/scheduler.ts#L175-L186)
+- [scheduler.ts:99-114](file://miniprogram/src/core/scheduler.ts#L99-L114)
+- [scheduler.ts:152-161](file://miniprogram/src/core/scheduler.ts#L152-L161)
+- [scheduler.ts:178-190](file://miniprogram/src/core/scheduler.ts#L178-L190)
 - [orchestrator.ts:278-303](file://miniprogram/src/core/orchestrator.ts#L278-L303)
 
 ## 结论
-Scheduler通过“逐轮就绪+并行执行”的方式实现了稳健的DAG调度，结合Checkpoint的人类确认机制与Orchestrator的回滚策略，确保了写操作的安全性与事务一致性。通过runToken与序列化弹窗，系统避免了并发双跑与UI冲突。建议在大规模任务场景下引入并发限制与超时重试，进一步提升稳定性与性能。
+Scheduler通过"逐轮就绪+并行执行"的方式实现了稳健的DAG调度，结合Checkpoint的人类确认机制与Orchestrator的回滚策略，确保了写操作的安全性与事务一致性。通过runToken与序列化弹窗，系统避免了并发双跑与UI冲突。**最新的shouldAbort箭头函数语义修复**进一步确保了runToken失效检测的准确性，避免了历史缺陷导致的误判问题。建议在大规模任务场景下引入并发限制与超时重试，进一步提升稳定性与性能。
 
 [本节为总结性内容，不直接分析具体文件]
 

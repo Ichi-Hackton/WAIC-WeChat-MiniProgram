@@ -3,11 +3,11 @@ schema_version: 1
 locale: zh-CN
 branch: main
 nodes_managed: true
-exported_at: "2026-09-30T02:59:14Z"
+exported_at: "2026-10-08T01:43:53Z"
 modules:
     "":
-        dir_name: MicroMate 微信小程序与雲托管服务根工程
-        title: MicroMate 微信小程序与雲托管服务根工程
+        dir_name: MicroMate 小程序与云托管双端工程
+        title: MicroMate 小程序与云托管双端工程
         scope:
             - package.json
             - project.config.json
@@ -21,22 +21,20 @@ modules:
         depends_on: []
         related_to: []
     cloudrun:
-        dir_name: MicroMate 雲托管 HTTP 服務（LLM 代理與 SKILL 端點）
-        title: MicroMate 雲托管 HTTP 服務（LLM 代理與 SKILL 端點）
+        dir_name: MicroMate 微信雲托管容器服務
+        title: MicroMate 微信雲托管容器服務
         scope:
             - cloudrun/
         source_files: []
         children: []
         depends_on: []
-        related_to:
-            - path: miniprogram
+        related_to: []
     miniprogram:
-        dir_name: MicroMate 微信小程序 Agent 运行时
-        title: MicroMate 微信小程序 Agent 运行时
+        dir_name: MicroMate Agent 小程序运行时
+        title: MicroMate Agent 小程序运行时
         scope:
             - miniprogram/
         source_files: []
         children: []
         depends_on: []
-        related_to:
-            - path: cloudrun
+        related_to: []

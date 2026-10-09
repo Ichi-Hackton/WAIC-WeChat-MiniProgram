@@ -1,9 +1,0 @@
-schema_version: 1
-module_path: cloudrun
-title: MicroMate 雲托管 HTTP 服務（LLM 代理與 SKILL 端點）
-scope:
-    - cloudrun/
-source_files: []
-depends_on: []
-related_to:
-    - path: miniprogram
