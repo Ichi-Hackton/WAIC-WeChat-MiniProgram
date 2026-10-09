@@ -6,9 +6,9 @@
  * API Key 僅存在於容器環境變數，絕不落入代碼或小程序端（規範 § 8.3）。
  *
  * 環境變數：
- *   LLM_BASE_URL — 供應商 Base URL（如 https://api.deepseek.com/v1），必填
+ *   LLM_BASE_URL — 供應商 Base URL（如 https://api.minimax.cn/v1），必填
  *   LLM_API_KEY  — 供應商金鑰，必填
- *   LLM_MODEL    — 預設模型名，可選（預設 deepseek-chat）
+ *   LLM_MODEL    — 模型名，可選（預設 MiniMax-M3；模型由雲端固定，請求不可覆蓋）
  *
  * 錯誤語義（與小程序端 services/llm.ts 對齊）：
  *   - 未配置 / 上游失敗 → HTTP 503（小程序端視為可重試；開發/體驗環境
@@ -37,7 +37,6 @@ interface ChatCompletionResponse {
 
 /** 小程序端 LLMRequest（與 miniprogram/src/services/llm.ts 對齊，僅聲明用到的欄位） */
 interface LLMRequestBody {
-  model?: string;
   messages?: Array<{ role?: string; content?: string }>;
   temperature?: number;
   maxTokens?: number;
@@ -52,16 +51,20 @@ function upstreamFail(message: string): { httpStatus: number; body: { code: numb
 /** 上游 LLM 呼叫逾時上限（毫秒） */
 const UPSTREAM_TIMEOUT_MS = 30_000;
 
+/** 固定預設模型（LLM_MODEL 未設定時兜底；模型由雲端唯一決定，請求不可覆蓋） */
+const DEFAULT_LLM_MODEL = 'MiniMax-M3';
+
 /**
  * GET /api/config — LLM 配置狀態查詢（脫敏）
  *
- * 供小程序端展示當前 LLM 接入狀態（供應商 / 模型 / 是否已配 Key），
+ * 運維排查入口（LLM 型號不對用戶展示，小程序端已無調用方）：
+ * 回報當前接入狀態（供應商 / 模型 / 是否已配 Key），
  * 絕不返回 API Key 本身；baseUrl 僅回 host（如 api.minimax.cn）。
  */
 const handleConfig: RouteHandler = async () => {
   const baseUrl = process.env.LLM_BASE_URL;
   const apiKey = process.env.LLM_API_KEY;
-  const model = process.env.LLM_MODEL ?? 'deepseek-chat';
+  const model = process.env.LLM_MODEL ?? DEFAULT_LLM_MODEL;
   let host = '';
   try {
     host = baseUrl ? new URL(baseUrl).host : '';
@@ -88,7 +91,13 @@ const handleConfig: RouteHandler = async () => {
   });
 };
 
-const handleChat: RouteHandler = async (body) => {
+/**
+ * LLM 對話代理處理器
+ *
+ * 匯出供同服務 SKILL 端點復用（如 skill-counseling 以自有 System Prompt
+ * 構造 messages 後直呼，避免多一跳 HTTP 自轉發）；亦直接註冊於 llmRoutes。
+ */
+export const handleChat: RouteHandler = async (body) => {
   const baseUrl = process.env.LLM_BASE_URL;
   const apiKey = process.env.LLM_API_KEY;
   if (!baseUrl || !apiKey) {
@@ -107,7 +116,7 @@ const handleChat: RouteHandler = async (body) => {
   }
 
   const payload: ChatCompletionRequest = {
-    model: req.model ?? process.env.LLM_MODEL ?? 'deepseek-chat',
+    model: process.env.LLM_MODEL ?? DEFAULT_LLM_MODEL,
     messages: req.messages.map((m) => ({ role: m.role as string, content: m.content as string })),
     temperature: typeof req.temperature === 'number' ? req.temperature : undefined,
     max_tokens: typeof req.maxTokens === 'number' ? req.maxTokens : undefined,
