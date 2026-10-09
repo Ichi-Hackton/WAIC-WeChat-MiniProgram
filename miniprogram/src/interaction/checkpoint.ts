@@ -9,7 +9,8 @@
  *
  * 安全网：
  *   1. rollback 機制：寫操作失敗可反序撤銷已成功的 Task
- *   2. AI 專屬卡：wx.requestPayment 本身彈銀行級密碼框，不受 checkpoint 影響
+ *   2. 跳轉模式：2026-10 真實渠道上線後，寫操作（購票 / 購物 / 預約）交付
+ *      「跳轉下單卡」——真實交易與支付在官方渠道側完成，交易確認由渠道承擔
  *   3. 「重置」按鈕：誤操作可一鍵清空對話重來
  *
  * 保留函式簽名原因：
@@ -21,7 +22,7 @@
 
 import type { CheckpointInput, ConfirmPlanInput } from '../types/checkpoint';
 import { BRAND_AI_GENERATED_BY } from '../types/brand';
-import { formatCents } from '../services/payment';
+import { formatCents } from '../utils/field-labels';
 import { info as logInfo } from '../utils/logger';
 
 // 型別已下沉至 types/checkpoint.d.ts（core 層依賴注入用），此處 re-export 保持兼容
@@ -81,6 +82,33 @@ function findAmountItems(input: Record<string, unknown>): AmountItem[] | undefin
   return undefined;
 }
 
+/** 常見入參鍵 → 中文標籤（白名單：未映射鍵 / 巢狀值一律略過，不向用戶暴露 JSON 代碼） */
+const INPUT_LABELS: Record<string, string> = {
+  from: '出發',
+  to: '到達',
+  date: '日期',
+  seatType: '座位',
+  trainNo: '車次',
+  passengerName: '乘車人',
+  city: '城市',
+  keyword: '關鍵詞',
+  name: '名稱',
+  quantity: '數量',
+  flightNo: '航班',
+  cabin: '艙位',
+};
+
+/** 入參 → 逐行「中文標籤：標量值」（未映射鍵、物件 / 陣列值一律略過） */
+function formatScalarLines(input: Record<string, unknown>): string {
+  const lines: string[] = [];
+  for (const [key, value] of Object.entries(input)) {
+    const label = INPUT_LABELS[key];
+    if (!label || value === null || typeof value === 'object') continue;
+    lines.push(`· ${label}：${String(value)}`);
+  }
+  return lines.length > 0 ? lines.join('\n') : '· 任務參數（略）';
+}
+
 /**
  * 入參明細格式化（規範 § 10 紅線：支付前強制展示明細）
  *
@@ -89,7 +117,7 @@ function findAmountItems(input: Record<string, unknown>): AmountItem[] | undefin
  *   2. 標量 priceCent / amountCent → 單筆金額展示（如火車票 book_ticket，
  *      值來自上游查詢任務的 inputBindings 注入——規劃層保證「先查詢後下單」
  *      依賴鏈，使確認彈窗展示即時票價；下單金額以雲端再核實為準）
- *   3. 其他 → 緊湊 JSON（截 500 字元）
+ *   3. 其他 → 鍵值中文標籤行（未映射欄位略過，不輸出原始 JSON）
  */
 function formatInputDetail(input: Record<string, unknown>): string {
   const items = findAmountItems(input);
@@ -107,19 +135,23 @@ function formatInputDetail(input: Record<string, unknown>): string {
     typeof input.priceCent === 'number' ? input.priceCent :
     undefined;
   if (scalarCent !== undefined) {
-    const label = input.amountCent !== undefined ? '金額' : '票價（即時查詢，下單以雲端核實為準）';
-    const json = { ...input };
-    delete json.priceCent;
-    delete json.amountCent;
-    return `${label}：${formatCents(scalarCent)}\n${JSON.stringify(json).slice(0, 400)}`;
+    // priceCent <= 0 為「未取得即時票價」語義（如飛常準票價端點未覆蓋該航班），
+    // 如實展示待核實，不輸出誤導性 ¥0 / 負數金額；amountCent 恒為正常金額
+    const isAmount = input.amountCent !== undefined;
+    const amountLine = isAmount || scalarCent > 0
+      ? `${isAmount ? '金額' : '票價（即時查詢，下單以雲端核實為準）'}：${formatCents(scalarCent)}`
+      : '票價：暫無即時報價，下單以雲端核實為準';
+    const rest = { ...input };
+    delete rest.priceCent;
+    delete rest.amountCent;
+    return `${amountLine}\n${formatScalarLines(rest)}`;
   }
-  const json = JSON.stringify(input);
-  return json.length > 500 ? `${json.slice(0, 500)}…` : json;
+  return formatScalarLines(input);
 }
 
-/** 單步寫操作確認：預設直接通過（彈窗已禁用） */
+/** 單步寫操作確認：預設直接通過（彈窗已禁用；跳轉模式下真實交易在渠道側確認） */
 export async function awaitCheckpoint(input: CheckpointInput): Promise<boolean> {
   const summary = input.task.summary ?? `${input.task.skillId}.${input.task.action}`;
-  logInfo(`[checkpoint/auto] 寫操作預設通過：${summary}`);
+  logInfo(`[checkpoint/auto] 寫操作預設通過（跳轉模式，真實交易於渠道側完成）：${summary}`);
   return true;
 }

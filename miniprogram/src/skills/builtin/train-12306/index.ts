@@ -11,8 +11,9 @@
  */
 
 import type { AgentContext } from '../../../types/context';
-import type { SkillInstance, SkillResult, SkillMeta } from '../../../types/skill';
-import { postContainer, type CloudResponse } from '../../../services/cloud';
+import type { SkillInstance, SkillResult, SkillMeta, JumpPackage } from '../../../types/skill';
+import { postContainer } from '../../../services/cloud';
+import type { CloudResponse } from '../../../services/cloud';
 import { error as logError, info as logInfo } from '../../../utils/logger';
 
 /** search_train 入參 */
@@ -59,23 +60,24 @@ export interface BookTicketInput {
   priceCent?: number;
 }
 
-/** book_ticket 出參 */
+/** book_ticket 出參（2026-10 跳轉模式：真實下單與支付在 12306 官方側完成） */
 export interface BookTicketOutput {
   orderId: string;
   trainNo: string;
   amountCent: number;
-  status: 'pending_payment' | 'paid';
-  payDeadline: number; // epoch ms
+  status: 'pending_external' | 'completed' | 'cancelled';
+  /** 跳轉包（appId 為空串 = copy-only，僅複製購票資訊） */
+  jump?: JumpPackage;
 }
 
 export const meta = {
   id: 'skill.train.12306',
   name: '12306 火車票',
   description:
-    '【能做】查詢中國大陸境內高鐵 / 普速車次（search_train），並下單購票（book_ticket）。' +
-    '【不能做】不能改簽、不能退票（須走 12306 官方）、不能查詢國際列車。' +
+    '【能做】查詢中國大陸境內高鐵 / 普速車次實時餘票與票價（search_train，12306 真實數據），並生成購票資訊卡跳轉 12306 官方小程序下單（book_ticket，支付在官方側完成）。' +
+    '【不能做】不能代付（真實交易在 12306 官方小程序完成）、不能改簽、不能退票（須走 12306 官方）、不能查詢國際列車。' +
     '【觸發時機】用戶提到「高鐵/動車/火車/車次/12306」並表達查詢或購票意圖時。',
-  version: '1.0.0',
+  version: '1.1.0',
   owner: 'wx-12306-mock',
   tags: ['出行', '交通', '火車'],
   capabilities: [
@@ -127,7 +129,7 @@ export const meta = {
     },
     {
       action: 'book_ticket',
-      description: '下單購買指定車次（會凍結座位）',
+      description: '生成購票資訊卡並跳轉 12306 官方小程序下單（真實支付在官方側完成）',
       inputSchema: {
         type: 'object',
         required: ['trainNo', 'date', 'seatType', 'passengerName', 'passengerIdNo'],
@@ -151,7 +153,8 @@ export const meta = {
         properties: {
           orderId: { type: 'string' },
           amountCent: { type: 'integer' },
-          status: { type: 'string', enum: ['pending_payment', 'paid'] },
+          status: { type: 'string', enum: ['pending_external', 'completed', 'cancelled'] },
+          jump: { type: 'object', description: '跳轉包（appId 空串 = 僅複製購票資訊）' },
         },
       },
       idempotent: false,
@@ -264,21 +267,36 @@ async function invokeBook(
     env,
     '/api/skill/skill.train.12306/book_ticket',
     input,
-    { sessionId },
+    // 寫操作禁用自動重試：逾時重試會重複下單（雲端尚無 clientToken 冪等鍵）
+    { sessionId, retry: false },
   );
   if (res.code === 0 && res.data) {
     return { success: true, data: res.data };
   }
-  // 雲端不可用時返回 mock：負數碼 = 雲基礎設施錯誤（見 invokeSearch 說明）
+  // 雲端不可用時返回 mock：負數碼 = 雲基礎設施錯誤（見 invokeSearch 說明）。
+  // mock 與雲端跳轉模式同構：pending_external + 購票資訊卡（copy-only，
+  // 開發者工具離線演示時 UI 形態與真實鏈路一致）
   if (res.code < 0) {
+    const amountCent = 55300; // 假設 553 元（與雲端靜態價目表二等座對齊）
+    const copyText = [
+      `車次 ${input.trainNo}（${input.date}）`,
+      `${input.from ?? ''} → ${input.to ?? ''}`,
+      `二等座 ¥${(amountCent / 100).toFixed(2)}`,
+      `乘車人 ${input.passengerName}`,
+    ].join('\n');
     return {
       success: true,
       data: {
-        orderId: `mock_order_${Date.now()}`,
+        orderId: `mock_trn_${Date.now()}`,
         trainNo: input.trainNo,
-        amountCent: 55300, // 假設 553 元
-        status: 'pending_payment',
-        payDeadline: Date.now() + 15 * 60 * 1000,
+        amountCent,
+        status: 'pending_external',
+        jump: {
+          target: 'train_12306',
+          appId: '',
+          copyText,
+          note: '真實交易於外部官方渠道完成，支付與售後以渠道為準',
+        },
       },
     };
   }

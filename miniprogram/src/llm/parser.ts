@@ -11,6 +11,7 @@
 
 import type { Plan } from '../types/plan';
 import type { Task } from '../types/task';
+import type { TripMeta } from '../types/trip';
 
 const PLAN_SCHEMA_VERSION = '1.0';
 
@@ -32,7 +33,16 @@ export interface PlannerLLMOutput {
     inputBindings?: Record<string, { fromTaskId?: string; fromField?: string }>;
     dependsOn?: string[];
     summary?: string;
+    /** 時間線標籤（行程 DAG 專用，如「10-11 下周六」） */
+    timeLabel?: string;
   }>;
+  /** 行程三要素（行程複合意圖時攜帶；四欄位齊全才會落入 Plan.trip） */
+  trip?: {
+    date?: string;
+    dateLabel?: string;
+    city?: string;
+    activity?: string;
+  };
   message?: string;
 }
 
@@ -61,10 +71,11 @@ export function extractJson(rawText: string): unknown {
 
 /**
  * 佔位符值檢測：LLM 對無法確定的參數偶爾輸出「<需要用戶提供出行日期>」
- * 類佔位符而非追問（實測復現）。此類值流入 SKILL 會產生髒請求，
- * 在解析層攔截：拋錯走 failed 提示用戶重新描述（Planner prompt 同步
- * 引導「缺參數應追問」）。已被 inputBindings 覆蓋的鍵除外（值會被上游
- * 任務輸出替換，佔位符無害）。
+ * 類佔位符或空字符串（如城市未知時輸出 city:""）而非追問（均實測復現，
+ * 空字符串會穿透 validator 的 required 缺席檢查、以髒請求打到雲端才被
+ * 400 拒絕）。此類值流入 SKILL 會產生髒請求，在解析層攔截：拋錯走
+ * failed 並提示用戶補充參數（Planner prompt 同步引導「缺參數應追問」）。
+ * 已被 inputBindings 覆蓋的鍵除外（值會被上游任務輸出替換，佔位符無害）。
  */
 /** Planner 輸出的單個任務（佔位符檢測用元素型別） */
 type PlannerTask = NonNullable<PlannerLLMOutput['tasks']>[number];
@@ -75,8 +86,16 @@ function assertNoPlaceholder(task: PlannerTask, idx: number): void {
   for (const [key, value] of Object.entries(t.input)) {
     if (key in (t.inputBindings ?? {})) continue; // 該鍵將被 binding 覆蓋
     if (typeof value !== 'string') continue;
-    if (/^<[^<>]{0,40}>$/.test(value.trim()) || value === 'TBD' || value === 'null' || value === 'undefined') {
-      throw new LLMParserError(`task[${idx}].input.${key} 含佔位符值「${value}」——缺少必要參數時應追問用戶而非填佔位符`);
+    if (
+      value.trim() === '' ||
+      /^<[^<>]{0,40}>$/.test(value.trim()) ||
+      value === 'TBD' ||
+      value === 'null' ||
+      value === 'undefined'
+    ) {
+      throw new LLMParserError(
+        `缺少必要參數：input.${key} 為空值/佔位符（「${value}」）——請補充該參數後重新描述`,
+      );
     }
   }
 }
@@ -126,7 +145,21 @@ export function toPlan(llm: PlannerLLMOutput, intent: string, planId: string): P
     status: 'pending',
     retryCount: 0,
     summary: t.summary ?? `${t.skillId}.${t.action}`,
+    // 行程時間線標籤透傳（普通任務缺省）
+    ...(t.timeLabel ? { timeLabel: t.timeLabel } : {}),
   }));
+
+  // 行程三要素：四欄位齊全才附著（缺一即非完整行程，不落庫為日程）
+  const tripRaw = llm.trip;
+  const trip: TripMeta | undefined =
+    tripRaw && tripRaw.date && tripRaw.dateLabel && tripRaw.city && tripRaw.activity
+      ? {
+          date: tripRaw.date,
+          dateLabel: tripRaw.dateLabel,
+          city: tripRaw.city,
+          activity: tripRaw.activity,
+        }
+      : undefined;
 
   return {
     id: planId,
@@ -136,6 +169,7 @@ export function toPlan(llm: PlannerLLMOutput, intent: string, planId: string): P
     status: 'draft',
     // LLM 附注透傳：空 tasks 時的追問文案（orchestrator 據此提示用戶補充參數）
     ...(llm.message ? { note: llm.message } : {}),
+    ...(trip ? { trip } : {}),
   };
 }
 

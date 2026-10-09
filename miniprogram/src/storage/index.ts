@@ -4,3 +4,5 @@
 
 export * from './session';
 export * from './cache';
+export * from './passenger';
+export * from './trip';

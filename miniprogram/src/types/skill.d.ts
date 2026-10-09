@@ -103,6 +103,29 @@ export interface SkillInstance<TInput = unknown, TOutput = unknown> {
   ): Promise<void>;
 }
 
+/**
+ * 外部渠道跳轉包（2026-10 真實渠道上線）
+ *
+ * book_ticket / book_flight 等「跳轉下單」
+ * 類寫操作的返回 data 均攜帶 jump 欄位，結構與雲端 external-jump.ts 的
+ * buildJump 輸出逐字對齊。appId 為空串 = 該渠道暫未接入小程序跳轉，
+ * 前端隱藏「前往下單」按鈕、僅保留複製資訊（copy-only 降級）。
+ */
+export interface JumpPackage {
+  /** 跳轉渠道識別字（train_12306 / ota_flight / jd / meituan / taobao / none） */
+  target: string;
+  /** 目標小程序 appId（空串 = copy-only） */
+  appId: string;
+  /** 目標頁面路徑（可帶 query，缺省開首頁） */
+  path?: string;
+  /** 京東聯盟小程序跳轉指令（轉鏈產物，僅 target=jd 攜帶） */
+  jCommand?: string;
+  /** 複製資訊（購票 / 購物 / 預約需求摘要，跳轉後供官方渠道頁面比對） */
+  copyText: string;
+  /** 模式說明（展示於跳轉卡底部） */
+  note: string;
+}
+
 /** 簡化版 SkillMeta，僅保留 LLM 規劃需要的欄位（降低 token 消耗） */
 export interface SkillMetaSlim {
   id: string;

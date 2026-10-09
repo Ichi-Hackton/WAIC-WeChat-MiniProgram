@@ -4,7 +4,14 @@
  * 規範來源：.qoder/rules/Agent.md § 15
  *
  * 此檔案位於 src/ 層，為**純模組**（頂層不得呼叫 App/Page）：
- *   1. 註冊所有 SKILL（12306 / 星巴克 / 網購商城 / 生活預約 / AI 卡支付）
+ *   1. 註冊所有 SKILL（出行域：12306 火車票 / 飛常準機票 / 天氣查詢）
+ *
+ * 2026-10 技能收敛：星巴克 / 網購商城 / 生活預約 / 演出票務 / 心理諮詢 /
+ * AI 卡支付六域下架（個人主體補不動真實交易渠道：星巴克與美團開放平台
+ * 僅面向企業資質 ISV、大麥 / 秀動無公開 API、微信支付個人主體不可開通；
+ * 購物域聯盟憑證未配置前演示商品亦屬假數據）。保留域全部為「查詢真實
+ * 數據源 + 跳轉官方渠道下單」的個人可及鏈路；下架代碼見 git 歷史，
+ * 企業主體與商務渠道就緒後按 SKILL 註冊架構回補即可。
  *   2. 冪等初始化雲開發環境
  *   3. 建構 Orchestrator 並轉發狀態 / 任務 / 計劃事件供 UI 訂閱
  *   4. 暴露 handleIntent / resetAgent / getState 對外入口
@@ -22,14 +29,12 @@ import { SkillRegistry } from './skills/registry';
 // 注意：微信運行時 require 不支援 Node 式目錄解析（不會自動補 /index.js），
 // import 目錄模組必須顯式寫至 /index，否則編譯後報 module is not defined
 import { instance as train12306 } from './skills/builtin/train-12306/index';
-import { instance as starbucks } from './skills/builtin/coffee-starbucks/index';
-import { instance as aiCard } from './skills/builtin/payment-aicard/index';
-import { instance as shoppingMall } from './skills/builtin/shopping-mall/index';
-import { instance as bookingCenter } from './skills/builtin/booking-center/index';
+import { instance as flightVariflight } from './skills/builtin/flight-variflight/index';
+import { instance as weatherQuery } from './skills/builtin/weather-query/index';
 import { Orchestrator } from './core/orchestrator';
 import { buildContext } from './core/context';
 import { confirmPlan, awaitCheckpoint } from './interaction/checkpoint';
-import { ensureCloudInit, getContainer, isDevEnv, LOCAL_RUN_BASE } from './services/cloud';
+import { ensureCloudInit, isDevEnv, LOCAL_RUN_BASE } from './services/cloud';
 import { BRAND_NAME } from './types/brand';
 import { info as logInfo, error as logError, setRemoteSink } from './utils/logger';
 import { appendHistory } from './storage/session';
@@ -37,8 +42,39 @@ import type { AgentResponse, AgentState } from './types/agent-state';
 import type { Plan } from './types/plan';
 import type { Task } from './types/task';
 
-/** 雲端環境 ID（MVP 寫死，實際應從 mini config 注入） */
-const CLOUD_ENV = 'micromate-prod-001';
+/** 雲端環境 ID（MVP 寫死，實際應從 mini config 注入；匯出供頁面直接消費，如語音輸入） */
+export const CLOUD_ENV = 'micromate-prod-001';
+
+/**
+ * 訂閱消息模板 ID（出發提醒；2026-10 產品評審 #4 複訪通道）
+ *
+ * 個人主體小程序可在後台「功能 → 訂閱消息」申請一次性模板（如「行程
+ * 出發提醒」類）。申請通過後將模板 ID 填入此處，行程頁將出現「訂閱出發
+ * 提醒」按鈕（tap 授權，微信要求必須由點擊動作觸發）。
+ *
+ * 為空串時按鈕不渲染（配置驅動，不出現無效按鈕——「真實或誠實缺失，
+ * 不演」）。推送側（出發前一天）由雲托管定時觸發器調微信開放接口
+ * subscribeMessage.send（雲托管容器內可免 access_token 直調）完成，
+ * 屬部署側配置，模板 ID 就位後上線——授權鏈路本身真實可用。
+ */
+export const SUBSCRIBE_TMPL_TRIP_REMIND = '';
+
+/**
+ * 半屏跳轉白名單（2026-10 半屏升級：wx.openEmbeddedMiniProgram）
+ *
+ * 前置條件（缺一不可，均為部署側操作）：
+ *   1. 小程序管理後台「設置 → 第三方設置 → 半屏小程序管理」向目標渠道
+ *      （12306 / OTA）發起申請並獲通過（個人主體小程序能否獲官方大渠道
+ *      審批需實測——不通過時微信自動降級普通跳轉，功能不斷裂）；
+ *   2. EXTERNAL_JUMP 環境變數已配置對應渠道 appId（查詢 / 購票卡才會
+ *      攜帶跳轉入口）；
+ *   3. 通過後將該 appId 填入本清單（跳轉自動升級半屏，支付環節由渠道
+ *      自行轉全屏——allowFullScreen，基礎庫 3.10.0 起強制 true）。
+ *
+ * 空清單 = 全部普通跳轉（現狀，零行為變化）；半屏 fail 時顯式降級
+ * 普通跳轉再兜底提示（services/jump.ts），任何環境下單路徑不斷裂。
+ */
+export const EMBEDDED_JUMP_APPIDS: readonly string[] = [];
 
 /** Runtime 對外事件監聽器（UI 訂閱用，全部可選） */
 export interface AgentRuntimeEvents {
@@ -48,14 +84,6 @@ export interface AgentRuntimeEvents {
   onTaskUpdate?: (task: Task) => void;
   /** Plan 生成 / 更新（計劃卡片渲染用） */
   onPlanUpdate?: (plan: Plan) => void;
-}
-
-/** LLM 接入狀態（GET /api/config 脫敏回應，供 UI 展示） */
-export interface LlmStatus {
-  configured: boolean;
-  provider: string;
-  model: string;
-  baseUrl: string;
 }
 
 /** Agent Runtime：由 miniprogram/app.ts 於 onLaunch 建構並注入 globalData */
@@ -70,8 +98,6 @@ export interface AgentRuntime {
   getCurrentPlan(): Plan | undefined;
   /** 訂閱 runtime 事件；返回取消訂閱函數（頁面 onUnload 時呼叫） */
   subscribe(events: AgentRuntimeEvents): () => void;
-  /** 查詢 LLM 接入狀態（雲端 /api/config 脫敏回應；離線時拋錯由呼叫方兜底） */
-  getLlmStatus(): Promise<LlmStatus>;
 }
 
 /**
@@ -82,11 +108,12 @@ export interface AgentRuntime {
  */
 function ensureSkillsRegistered(): void {
   if (SkillRegistry.size() > 0) return;
+  // 2026-10 技能收敛：僅保留出行域三個「數據真實 + 個人主體可及」的 SKILL；
+  // 支付發生在渠道側收銀台（跳轉模式），無需 AI 專屬卡。其餘六域回補
+  // 條件見檔頂注釋。
   SkillRegistry.register(train12306);
-  SkillRegistry.register(starbucks);
-  SkillRegistry.register(aiCard);
-  SkillRegistry.register(shoppingMall);
-  SkillRegistry.register(bookingCenter);
+  SkillRegistry.register(flightVariflight);
+  SkillRegistry.register(weatherQuery);
 }
 
 /** Runtime 單例（重複呼叫 createAgentRuntime 返回同一實例） */
@@ -200,18 +227,6 @@ export function createAgentRuntime(cloudEnv: string = CLOUD_ENV): AgentRuntime {
       return () => {
         listeners.delete(events);
       };
-    },
-
-    /** 查詢 LLM 接入狀態（供首頁狀態列展示；失敗時由呼叫方顯示離線文案） */
-    async getLlmStatus(): Promise<LlmStatus> {
-      const res = await getContainer<{ llm: LlmStatus }>(cloudEnv, '/api/config', {
-        retry: false,
-        timeoutMs: 5_000,
-      });
-      if (res.code === 0 && res.data?.llm) {
-        return res.data.llm;
-      }
-      throw new Error(res.message ?? 'LLM 配置查詢失敗');
     },
   };
 

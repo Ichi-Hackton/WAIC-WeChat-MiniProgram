@@ -13,6 +13,7 @@
 import type { SkillMetaSlim } from '../../types/skill';
 import type { AgentContext } from '../../types/context';
 import { extractPassenger } from '../../utils/passenger';
+import { extractTripSlots } from '../../utils/trip';
 
 export interface PlannerPromptInput {
   userIntent: string;
@@ -59,9 +60,17 @@ function buildContextString(ctx: AgentContext): string {
   lines.push(`- 用戶 ID：${ctx.userId}`);
   lines.push(`- 當前時間：${new Date().toISOString()}`);
   if (ctx.userProfile.location) {
-    lines.push(
-      `- 用戶位置：${ctx.userProfile.location.city ?? '未知'} (${ctx.userProfile.location.lat}, ${ctx.userProfile.location.lng})`,
-    );
+    // city 由定位 + 雲端逆地理補全（services/geo.ts），可能缺失；座標為
+    // 可選增強（定位失敗時缺失）。城市缺失時告誡 LLM 勿由座標臆測城市
+    const { city, lat, lng } = ctx.userProfile.location;
+    const hasCoord = lat !== undefined && lng !== undefined;
+    if (city && hasCoord) {
+      lines.push(`- 用戶位置：${city} (${lat}, ${lng})`);
+    } else if (city) {
+      lines.push(`- 用戶位置：${city}（有城市無座標——需座標的任務（如天氣）應向用戶確認定位）`);
+    } else if (hasCoord) {
+      lines.push(`- 用戶位置：城市未知（座標 ${lat}, ${lng}）——任務參數需要城市時應向用戶確認，勿由座標臆測`);
+    }
   }
   if (Object.keys(ctx.userProfile.preferences).length > 0) {
     lines.push(`- 用戶偏好：${JSON.stringify(ctx.userProfile.preferences)}`);
@@ -79,6 +88,17 @@ function buildContextString(ctx: AgentContext): string {
       `- 已提供乘車人：${passenger.name} / 證號 ${passenger.idNo}` +
         '（規劃 book_ticket 時必須原樣寫入 passengerName 與 passengerIdNo，嚴禁省略）',
     );
+  }
+  // 已收集的行程要素：行程複合意圖的多輪收集依賴（「下周去北京」→「看話劇」），
+  // 固定注入不受滑動窗口擠出（與乘車人同構）；LLM 據此判斷三要素（日期 /
+  // 目的地 / 活動）缺哪個就只追問哪個，不得重複追問已提供的
+  const tripSlots = extractTripSlots(ctx.messages, '');
+  if (tripSlots.date || tripSlots.city || tripSlots.activity) {
+    const parts: string[] = [];
+    if (tripSlots.date) parts.push(`日期 ${tripSlots.dateLabel ?? tripSlots.date}`);
+    if (tripSlots.city) parts.push(`目的地 ${tripSlots.city}`);
+    if (tripSlots.activity) parts.push(`活動 ${tripSlots.activity}`);
+    lines.push(`- 已收集行程要素：${parts.join('、')}（規劃行程時僅追問缺失要素）`);
   }
   // 最近對話（含 assistant 摘要）：多輪場景的參數延續依賴（如「訂 G531」
   // 沿用上一輪查詢的日期）。僅取尾部數條且截斷，控制 token 消耗
@@ -111,11 +131,16 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
    - 下單任務中用戶已點名的確定參數（如 trainNo）也寫字面值；
    - 上下文若有「已提供乘車人」行，book_ticket 的 passengerName / passengerIdNo
      必須以其字面值寫入（嚴禁省略，省略會導致執行校驗失敗）；
+   - 上下文若無「已提供乘車人」行，嚴禁規劃 book_ticket / book_flight
+     下單任務（即使意圖含買詞）——應按規則 9 回空 tasks 追問；
    - **僅查詢才能產生的動態數據**用 inputBindings 引用（如即時票價：
      { "priceCent": { "fromTaskId": "task_001", "fromField": "priceCentByTrain.G531" } }，
      僅繫結 priceCent 一個鍵）——確認彈窗才能展示真實金額。
    嚴禁自造過濾語法（如 trains[?trainNo=='G531']）；path 只支援點號直達。
-9. **嚴禁佔位符值**（如 "<需要用戶提供出行日期>"、"TBD"、null）：參數能從
+   注意：下單任務（book_ticket / book_flight）為跳轉模式——生成資訊卡
+   後跳轉官方渠道（12306 / OTA）完成真實下單與支付，無需也不應規劃任何
+   支付類任務。
+9. **嚴禁佔位符與空字符串**（如 "<需要用戶提供出行日期>"、"TBD"、null、""）：參數能從
    「最近對話」推斷就推斷；無法推斷且必填時（如乘車人姓名 passengerName /
    證號 passengerIdNo），回應 { "tasks": [] } 並在 "message" 中向用戶追問
    （如「請補充乘車人姓名與證件號」）。**嚴禁編造或沿用範例中的演示人名/
@@ -124,12 +149,25 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
    未完成的訂票需求一併規劃下單（search_train + book_ticket），
    不要對已有答案的問題重複追問。
 10. date 一律用具體日期字串（YYYY-MM-DD，按「當前時間」換算相對日期）。
+11. **行程複合意圖**（「什麼時候去什麼地方幹什麼」，如「我周六想去上海看
+   周杰倫的演唱會」「下周去北京」）：三要素 = 日期（date）/ 目的地城市
+   （city）/ 活動（activity）。
+   - 缺任一要素：回應 { "tasks": [] } 並在 "message" 追問（一次只問
+     一個缺口，優先順序 date → city → activity；上下文「已收集行程要素」
+     中已有的要素嚴禁重複追問）。
+   - 三要素齊全：頂層輸出 "trip" 對象，並展開出行行程 DAG——
+     交通為核心（search_train，出發城市取上下文用戶城市，到達 = 目的地）；
+     每個任務附 "timeLabel"（如 "10/11 周六"）。天氣任務僅當目的地與
+     用戶當前城市相同時規劃（get_weather 只支援當前定位座標）。
+   - 寫操作（book_ticket）僅在意圖含買詞（買 / 訂 /
+     下單 / 搶票）且點名車票時追加——「想去看看」只查詢不下單。
 
 ## 輸出 schema
 
 \`\`\`json
 {
   "intent": "<用戶原始意圖>",
+  "trip": { "date": "YYYY-MM-DD", "dateLabel": "周六", "city": "上海", "activity": "看一場演出" },
   "tasks": [
     {
       "skillId": "skill.xxx",
@@ -139,12 +177,15 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
         "param": { "fromTaskId": "task_001", "fromField": "data.field" }
       },
       "dependsOn": ["task_000"],
-      "summary": "人類可讀摘要"
+      "summary": "人類可讀摘要",
+      "timeLabel": "10/11 周六"
     }
   ],
   "message": "可選：當 tasks 為空時的理由或追問"
 }
 \`\`\`
+
+（trip 與 timeLabel 僅行程複合意圖攜帶，普通意圖省略這兩個欄位）
 
 ## 範例一：僅查詢
 
@@ -199,7 +240,30 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
         "priceCent": { "fromTaskId": "task_001", "fromField": "priceCentByTrain.G531" }
       },
       "dependsOn": ["task_001"],
-      "summary": "下單 G531 二等座（張三）需確認"
+      "summary": "生成購票卡跳轉 12306 下單（張三）需確認"
+    }
+  ],
+  "message": ""
+}
+\`\`\`
+
+## 範例三：行程複合意圖（出行行程 DAG + 時間線；多輪收集見規則 11）
+
+意圖：「我周六想去上海看球賽」（當前時間 2026-10-08T02:00:00Z 周四；用戶位置：北京 (39.9, 116.4)）
+
+\`\`\`json
+{
+  "intent": "周六去上海看球賽",
+  "trip": { "date": "2026-10-11", "dateLabel": "周六", "city": "上海", "activity": "看球賽" },
+  "tasks": [
+    {
+      "skillId": "skill.train.12306",
+      "action": "search_train",
+      "input": { "from": "北京", "to": "上海", "date": "2026-10-11", "seatType": "second_class" },
+      "inputBindings": {},
+      "dependsOn": [],
+      "timeLabel": "10/11 周六",
+      "summary": "查 10-11 北京→上海車次"
     }
   ],
   "message": ""

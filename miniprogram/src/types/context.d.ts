@@ -8,10 +8,13 @@
 
 import type { Plan } from './plan';
 
-/** 用戶位置（從 wx.getLocation 取得） */
+/** 用戶位置（城市優先取地址簿默認地址，未填寫時由定位 + 雲端逆地理編碼補全） */
 export interface UserLocation {
-  lat: number;
-  lng: number;
+  /** 緯度（gcj02）；地址簿已填城市而定位未授權 / 失敗時缺失（僅有城市上下文） */
+  lat?: number;
+  /** 經度（gcj02）；同上可能缺失 */
+  lng?: number;
+  /** 城市名（如「深圳市」）；優先取地址簿默認地址市級，未填寫時由雲端 /api/geo/reverse 補全，解析失敗時缺失 */
   city?: string;
 }
 

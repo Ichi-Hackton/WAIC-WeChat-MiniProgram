@@ -56,4 +56,6 @@ export interface Task {
   retryCount: number;
   /** 人類可讀摘要（用於 Plan 預覽） */
   summary?: string;
+  /** 時間線標籤（行程 DAG 專用，如「10-11 周六」；普通任務缺省） */
+  timeLabel?: string;
 }

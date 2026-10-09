@@ -53,3 +53,41 @@ export function addDays(d: Date | number, days: number): Date {
 export function tomorrowDate(): string {
   return formatDate(addDays(new Date(), 1));
 }
+
+/** 星期詞 → getDay() 值（週日 = 0） */
+const WEEKDAY_MAP: Record<string, number> = {
+  一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0,
+};
+
+/**
+ * 口語星期詞 → 具體日期（行程槽位的 date 來源之一）
+ *
+ * 支持形態：「周六 / 週六 / 星期六 / 本周六 / 下周六 / 禮拜三」等。
+ * 口徑：
+ *   - 「下周 X」固定取下一個自然週的 X（先算下週一，再偏移到目標日）
+ *   - 「X / 本週 X」取末來 7 天内最近的 X（含今天——今天恰為 X 時口語
+ *     「周六去」通常即指今天）
+ *
+ * @returns 日期（YYYY-MM-DD）與口語標籤（如「下周六」）；無命中返回 null
+ */
+export function resolveWeekday(
+  text: string,
+  now: Date = new Date(),
+): { date: string; label: string } | null {
+  const m = /(下|next)?(本|這|这)?(週|周|星期|禮拜|礼拜)([一二三四五六日天])/.exec(text);
+  if (!m) return null;
+  const target = WEEKDAY_MAP[m[4]];
+  if (target === undefined) return null;
+
+  if (m[1]) {
+    // 「下周 X」：下週一 = 本週一 + 7；本週一偏移 = (getDay + 6) % 7（週一為 0）
+    const mondayOffset = (now.getDay() + 6) % 7;
+    const nextMonday = addDays(now, 7 - mondayOffset);
+    const dayOffset = target === 0 ? 6 : target - 1;
+    return { date: formatDate(addDays(nextMonday, dayOffset)), label: m[0] };
+  }
+
+  // 「X / 本週 X」：未來 7 天内最近的 X（含今天）
+  const diff = (target - now.getDay() + 7) % 7;
+  return { date: formatDate(addDays(now, diff)), label: m[0] };
+}

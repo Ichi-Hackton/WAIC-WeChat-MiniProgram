@@ -7,7 +7,8 @@
  * 不在小程序端暴露 API Key。
  */
 
-import { postContainer, type CloudResponse } from './cloud';
+import { postContainer } from './cloud';
+import type { CloudResponse } from './cloud';
 import { retry } from '../utils/retry';
 import { error as logError } from '../utils/logger';
 
@@ -17,8 +18,6 @@ export interface LLMMessage {
 }
 
 export interface LLMRequest {
-  /** 模型（後端決定實際呼叫哪一家） */
-  model?: string;
   /** 對話歷史 */
   messages: LLMMessage[];
   /** 溫度 0~1，建議任務型用 0.3，生成型用 0.7 */

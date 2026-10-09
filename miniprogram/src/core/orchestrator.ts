@@ -10,9 +10,10 @@
  *                                                                              ↘ failed
  */
 
-import { buildContext } from './context';
+import { buildContext, pushMessage } from './context';
 import { plan as llmPlan, understand, aggregate as llmAggregate, PlannerLLMError } from '../llm/client';
 import { run as runScheduler, SchedulerDeadlockError } from './scheduler';
+import { saveTripFromPlan, updateTripFromPlan } from '../storage/trip';
 import * as skillAdapter from '../skills/adapter';
 import { getCapability } from '../skills/adapter';
 import { SkillRegistry } from '../skills/registry';
@@ -139,6 +140,9 @@ export class Orchestrator {
         this.transition('idle');
       }
       this.transition('understanding');
+      // 對話記憶接線：本輪用戶意圖寫入 ctx.messages（planner 的「最近對話」
+      // 與陪伴 SKILL 的多輪歷史均消費此數據；上限 20 條由 pushMessage 維護）
+      pushMessage(this.ctx, { role: 'user', content: intent, timestamp: Date.now() });
       const u = await understand(intent, this.ctx);
       if (u.kind === 'clarify') {
         // 狀態機歸位：提前返回必須轉回 idle，否則後續請求永久 BUSY
@@ -197,6 +201,10 @@ export class Orchestrator {
         };
       }
       planObj.status = 'confirmed';
+      // 行程落庫（第一階段同步）：行程 Plan 確認即建檔為日程（時間線記錄
+      // 任務初始狀態），供「我的行程」頁與到點提醒消費；非行程 Plan 無副作用
+      // （plan.trip 缺省返回 null）。core → storage 先例：core/context.ts
+      saveTripFromPlan(planObj);
 
       // 2. 執行（任務 waiting_human 時聯動轉入 awaiting_human，見 handleTaskUpdate）
       this.transition('executing');
@@ -215,6 +223,9 @@ export class Orchestrator {
         },
       });
       this.currentPlan = finalPlan;
+      // 行程狀態同步（第二階段同步）：時間線任務狀態與行程終態（done /
+      // partial）落庫；按 planId 冪等，覆蓋 done / failed / 提前中止全部路徑
+      updateTripFromPlan(finalPlan);
 
       // 執行期間被 reset / 新輪接管（模組級註冊表探測，與 isRunActive 同源）：
       // 狀態已被 reset 歸位，不再轉移
@@ -239,8 +250,14 @@ export class Orchestrator {
         this.transition('failed');
         const rolledCount = finalPlan.tasks.filter((t) => t.status === 'rolled_back').length;
         const rollNote = rolledCount > 0 ? `已回滾 ${rolledCount} 個已成功任務。` : '';
+        // 透出首個失敗任務的業務錯誤（如「必填欄位 city 不得為空字串」）：
+        // 僅「執行失敗」的通用文案無法指導用戶補充什麼（實測復現——
+        // 查詢任務缺城市時用戶不知該補城市）。訊息均為業務級中文
+        // 文案，無 URL / 堆疊等代碼級數據（脱敏規範）
+        const firstFail = finalPlan.tasks.find((t) => t.status === 'failed');
+        const failNote = firstFail?.result?.error?.message ? `原因：${firstFail.result.error.message}。` : '';
         return {
-          message: `${BRAND_AI_GENERATED_BY}：執行失敗，部分任務未完成。${rollNote}`,
+          message: `${BRAND_AI_GENERATED_BY}：執行失敗，部分任務未完成。${failNote}${rollNote}`,
           state: 'failed',
           cards: planCards,
         };

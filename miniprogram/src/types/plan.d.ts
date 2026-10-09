@@ -7,6 +7,7 @@
  */
 
 import type { Task } from './task';
+import type { TripMeta } from './trip';
 
 /** Plan 生命週期狀態 */
 export type PlanStatus =
@@ -32,6 +33,8 @@ export interface Plan {
   traceId?: string;
   /** Planner 附注（tasks 為空時的追問文案，如「請補充出行日期」） */
   note?: string;
+  /** 行程三要素（行程 DAG 專用；普通 Plan 缺省）。確認後由 Orchestrator 落庫為行程簿條目 */
+  trip?: TripMeta;
 }
 
 /** Plan 確認對話框需要的渲染資料 */

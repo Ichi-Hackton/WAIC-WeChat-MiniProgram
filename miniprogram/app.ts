@@ -15,7 +15,10 @@
 
 import { BRAND_NAME, BRAND_TAGLINE, BRAND_VERSION } from './src/types/brand';
 import { info as logInfo } from './src/utils/logger';
-import { createAgentRuntime, type AgentRuntime } from './src/app';
+import { createAgentRuntime, CLOUD_ENV } from './src/app';
+import type { AgentRuntime } from './src/app';
+import { ensureLogin } from './src/services/identity';
+import { markDailyActive } from './src/services/metrics';
 
 /** Agent Runtime 模組級持有（懶載入：首次存取 globalData.agent 時建構） */
 let agentRuntime: AgentRuntime | null = null;
@@ -28,9 +31,16 @@ App({
     // createAgentRuntime 為冪等單例，且 onLaunch 同步段必先於頁面
     // onLoad 執行，時序安全。
     logInfo(`微信 App 生命週期啟動 — ${BRAND_NAME} v${BRAND_VERSION}`);
+    // 靜默微信登入：wx.login → 雲托管換取 openid 並緩存。fire-and-forget，
+    // 同步段僅發起（wx.login 回調異步），不佔 onLaunch 耗時預算；
+    // ensureLogin 內部自行冪等 ensureCloudInit，不依賴懶載入的
+    // Agent Runtime（見 globalData.agent 註釋的時序契約）。
+    void ensureLogin(CLOUD_ENV);
   },
   onShow(): void {
     logInfo(`${BRAND_NAME} 進入前台`);
+    // 日活打點（2026-10 評審 #5 複訪率分子；同日去重，fire-and-forget）
+    markDailyActive(CLOUD_ENV);
   },
   onHide(): void {
     logInfo(`${BRAND_NAME} 進入後台`);

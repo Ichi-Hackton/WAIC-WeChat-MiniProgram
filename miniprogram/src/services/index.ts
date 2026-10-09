@@ -3,7 +3,10 @@
  */
 
 export * from './cloud';
+export * from './geo';
 export * from './storage';
 export * from './llm';
-export * from './payment';
 export * from './identity';
+export * from './metrics';
+export * from './trip-share';
+export * from './jump';

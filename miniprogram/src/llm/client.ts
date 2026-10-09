@@ -6,11 +6,13 @@
  * Planner → client.plan(intent, ctx, availableSkills) → Plan
  */
 
-import { callLLM, LLMError, type LLMMessage } from '../services/llm';
+import { callLLM, LLMError } from '../services/llm';
+import type { LLMMessage } from '../services/llm';
 import { CloudNetworkError, isDevEnv } from '../services/cloud';
 import { error as logError, info as logInfo, warn as logWarn } from '../utils/logger';
 import { genTraceId } from '../utils/idgen';
-import { applyPassengerSlot } from '../utils/passenger';
+import { applyPassengerSlot, findFirstMissingBookingPassenger } from '../utils/passenger';
+import { getDefaultPassenger } from '../storage/passenger';
 import { buildPlannerPrompt } from './prompts/planner';
 import { parsePlannerOutput, toPlan, LLMParserError } from './parser';
 import { rulePlan } from './rule-planner';
@@ -51,6 +53,57 @@ function devFallbackReason(e: unknown): string | null {
     return `LLM 代理錯誤（${e.message.slice(0, 60)}）`;
   }
   return null;
+}
+
+/**
+ * 規劃後處理：以本機個人資料（乘車人簿）補齊任務入參
+ *
+ * LLM 路徑與規則式降級路徑共用，保證兩條路徑行為一致：
+ *   火車 / 機票下單任務缺乘車人或為演示佔位時，以「對話明說 >
+ *   乘車人簿默認人」回填（applyPassengerSlot，純函數）
+ *
+ * 日誌不攜帶姓名 / 證號明文（隱私，§ 10 紅線）
+ */
+function applyLocalProfile(p: Plan, messages: AgentContext['messages']): void {
+  const defaultPassenger = getDefaultPassenger();
+  if (
+    applyPassengerSlot(
+      p,
+      messages,
+      defaultPassenger ? { name: defaultPassenger.name, idNo: defaultPassenger.idNo } : null,
+    )
+  ) {
+    logInfo('乘車人槽位回填：下單任務缺乘車人 / 為演示佔位，已以「對話明說或乘車人簿默認人」補齊');
+  }
+}
+
+/**
+ * 下單任務缺實名信息 → 整輪降級為追問（LLM 與規則式兩條路徑共用）
+ *
+ * 語義與 prompt 規則 9 對齊（LLM 缺乘車人本應自行回空 tasks + message
+ * 追問）：返回「空 tasks + note」形態的 Plan，Orchestrator 現有分支自動
+ * 以 NEEDS_INPUT + idle 收斂——用戶補充後下一輪 extractPassenger 提取到
+ * 成對「姓名 + 證件號」（或乘車人簿已有默認人），即可完整規劃「查詢 +
+ * 下單」。查詢任務一併暫緩（不帶病執行半個 Plan）：與規則 9「先追問
+ * 再整鏈規劃」的產品語義一致，避免「查詢成功、下單失敗」的破碎體驗
+ * （帶病執行實測復現：task_002 缺 passengerName / passengerIdNo 被執行
+ * 期校驗拒絕）。日誌僅攜帶任務號與缺失項標籤，不含明文（隱私 § 10）
+ */
+function clarifyIfPassengerMissing(p: Plan): Plan {
+  const miss = findFirstMissingBookingPassenger(p);
+  if (!miss) return p;
+  logWarn(
+    `下單任務 ${miss.taskId} 缺實名信息（${miss.missingFields.join('、')}），降級為追問${miss.roleLabel}信息`,
+  );
+  return {
+    id: p.id,
+    intent: p.intent,
+    tasks: [],
+    createdAt: p.createdAt,
+    status: 'draft',
+    traceId: p.traceId,
+    note: `請補充${miss.roleLabel}姓名與 18 位證件號（可說「${miss.roleLabel}王小明，身份證 110101⋯」，也可在「我的」頁乘車人簿預先保存），我會立即為您完成預訂`,
+  };
 }
 
 /**
@@ -101,7 +154,10 @@ export async function plan(
       ctx.trace.llmCalls -= 1; // 未實際消耗 LLM 呼叫，修正計數
       const fallback = toPlan(rulePlan(intent, ctx), intent, `plan_${Date.now()}`);
       fallback.traceId = traceId;
-      return fallback;
+      applyLocalProfile(fallback, ctx.messages);
+      // 規則式路徑的實名檢查：占位值非空不會命中，但與 LLM 路徑統一走同一
+      // 後處理管線，保證兩條路徑行為一致（本檔頂部注釋的既有原則）
+      return clarifyIfPassengerMissing(fallback);
     }
     logError('LLM 呼叫失敗', e);
     throw new PlannerLLMError('LLM 呼叫失敗，請稍後再試', e);
@@ -118,7 +174,12 @@ export async function plan(
   } catch (e) {
     if (e instanceof LLMParserError) {
       logError('LLM 輸出解析失敗', { raw: res.text.slice(0, 200) });
-      throw new PlannerLLMError('LLM 輸出無法解析，請重新描述意圖', e);
+      // 「缺少必要參數」類（assertNoPlaceholder 攔截的空值/佔位符）直接
+      // 透傳——指導用戶補充參數；結構性解析失敗保持通用文案
+      const msg = e.message.startsWith('缺少必要參數')
+        ? e.message
+        : 'LLM 輸出無法解析，請重新描述意圖';
+      throw new PlannerLLMError(msg, e);
     }
     throw e;
   }
@@ -126,14 +187,14 @@ export async function plan(
   // 4. 兜底：若 LLM 沒填 intent，沿用用戶輸入
   if (!planObj.intent) planObj.intent = intent;
 
-  // 5. 兜底：乘車人槽位回填——LLM 已從上下文槽位「知道」乘車人，但實測
-  //    可能未寫入任務參數（彈窗缺 passengerName → 校驗失敗）。對話中已提供
-  //    且任務缺失時代碼級回填，與 prompt 規則 8 的寫入義務構成雙保險。
+  // 5. 後處理：本機個人資料補齊——乘車人槽位回填（LLM 已從上下文槽位
+  //    「知道」乘車人但實測可能未寫入任務參數，彈窗缺 passengerName →
+  //    校驗失敗），與 prompt 規則 8 的寫入義務構成雙保險。
   //    日誌不攜帶姓名 / 證號明文（隱私）
-  if (applyPassengerSlot(planObj, ctx.messages)) {
-    logInfo('乘車人槽位回填：book_ticket 任務缺乘車人，已以對話中已提供信息補齊');
-  }
-  return planObj;
+  applyLocalProfile(planObj, ctx.messages);
+  // 6. 回填後仍缺實名信息 → 整輪降級為追問（LLM 違規「整鍵省略」實名欄位
+  //    的最終防線，見 clarifyIfPassengerMissing 注釋）
+  return clarifyIfPassengerMissing(planObj);
 }
 
 /**
@@ -150,21 +211,40 @@ export async function understand(
   return { kind: 'ok' };
 }
 
+/** action → 中文短語（summary 缺失或技術形態時的兜底，避免暴露 skillId.action 代碼）。
+ * 2026-10 跳轉模式：train / flight 域寫操作為「生成資訊卡跳轉官方渠道」，
+ * 支付在渠道側完成（站內代付任務已随演示域摘除）。 */
+const ACTION_LABELS: Record<string, string> = {
+  search_train: '查詢車次',
+  book_ticket: '生成購票卡跳轉 12306 下單',
+  search_flights: '查詢航班',
+  book_flight: '生成購票卡跳轉 OTA 下單',
+  get_weather: '查詢實時天氣',
+};
+
+/**
+ * 任務展示名：優先中文 summary；若 summary 為技術形態（parser 兜底會產生
+ * 「skillId.action」字串，含「skill.」前綴）則改用 action 中文名，
+ * 確保 EndUser 永遠看到人類可讀文案。導出供互動層（首頁計劃卡）復用。
+ */
+export function taskLabel(t: { summary?: string; action: string }): string {
+  const s = t.summary ?? '';
+  if (s && !s.includes('skill.')) return s;
+  return ACTION_LABELS[t.action] ?? '執行任務';
+}
+
 /**
  * 結果聚合（aggregating 階段）
  *
- * 將 Task 結果翻譯為人類可讀訊息。
- * MVP 簡化版：直接列出每個 Task 的成功狀態。
+ * 將 Task 結果翻譯為人類可讀訊息：僅列出任務的中文摘要行。
+ * 詳細數據不在此傾倒——首頁已以結構化交付卡（車次 / 航班 / 天氣卡）
+ * 呈現完整結果，對話氣泡中輸出原始 JSON 屬代碼級細節，EndUser 不應看到。
  */
 export function aggregate(plan: Plan, aiTag: string): string {
   const okTasks = plan.tasks.filter((t) => t.status === 'succeeded');
   if (okTasks.length === 0) {
     return `${aiTag} 已處理您的請求，但沒有產生結果。`;
   }
-  const lines = okTasks.map((t) => {
-    const r = t.result;
-    const dataStr = r?.data ? JSON.stringify(r.data).slice(0, 80) : '';
-    return `✓ ${t.summary ?? `${t.skillId}.${t.action}`}：${dataStr}`;
-  });
-  return [`${aiTag} 已完成 ${okTasks.length} 個任務：`, ...lines].join('\n');
+  const lines = okTasks.map((t) => `✓ ${taskLabel(t)}`);
+  return [`${aiTag} 已完成 ${okTasks.length} 項任務：`, ...lines].join('\n');
 }

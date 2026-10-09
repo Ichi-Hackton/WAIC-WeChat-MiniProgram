@@ -29,6 +29,13 @@ export const BRAND_TAGLINE_EN = 'Your Pocket AI Mate';
 /** 品牌短代號，用於 CLI 前綴、長度受限場景 */
 export const BRAND_SHORT = 'MM';
 
+/**
+ * 品牌頭像圖片路徑（相對於 miniprogramRoot）。
+ *
+ * 啟動畫面 splash-mark 與聊天回覆 .ai-avatar 共用，兩者皆以圓形裁切呈现。
+ */
+export const BRAND_AVATAR_IMG = '/assets/images/micromate-avatar.png';
+
 /** 內部版本號，CI 建置時由 build script 注入實際版本 */
 export const BRAND_VERSION = '0.0.0-dev';
 

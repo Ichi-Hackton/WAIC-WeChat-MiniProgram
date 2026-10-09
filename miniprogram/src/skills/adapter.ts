@@ -5,6 +5,7 @@
  *
  * Scheduler 透過此適配器呼叫 SKILL，負責：
  *   - 入參 schema 驗證
+ *   - 查詢類快取（idempotent capability，TTL 5 分鐘，見 storage/cache）
  *   - 呼叫前 / 後埋點
  *   - 統一錯誤轉換（任何丟擲的 Error 都包成 SkillError）
  *   - 不直接 import 'wx.*'（規範 § 7.1）
@@ -13,12 +14,16 @@
 import type { AgentContext } from '../types/context';
 import type { SkillCapability, SkillError, SkillInstance, SkillResult } from '../types/skill';
 import { validate } from '../utils/validator';
-import { error as logError, info as logInfo } from '../utils/logger';
+import { fieldLabel } from '../utils/field-labels';
+import { error as logError, info as logInfo, warn as logWarn } from '../utils/logger';
 import { SkillRegistry } from './registry';
+import * as cache from '../storage/cache';
 
 export interface InvokeOptions {
   /** 是否跳過 schema 驗證（內部呼叫用） */
   skipValidation?: boolean;
+  /** 是否跳過結果快取（預設查詢類 idempotent capability 走快取） */
+  skipCache?: boolean;
 }
 
 /** 將任意錯誤包裝為 SkillError */
@@ -60,11 +65,34 @@ export async function invoke(
   if (!options.skipValidation) {
     const v = validate(input, cap.inputSchema);
     if (!v.ok) {
+      // 開發者日誌保留完整技術細節（path + 原始訊息）；error.message 會經
+      // Orchestrator 失敗透出直達 EndUser，僅輸出中文標籤（脱敏規範：
+      // 欄位名 / path 屬代碼級數據，如「passengerName: 缺少必填欄位…」
+      // 實測透出，用戶無法據此行動）。防禦層：規劃後處理已把實名缺失
+      // 提前到 planning 階段（llm/client clarifyIfPassengerMissing），
+      // 此處攔其他欄位的漏網之魚
       const detail = v.errors.map((e) => `${e.path}: ${e.message}`).join('; ');
+      logWarn(`入參校驗失敗 ${skillId}.${action}：${detail}`);
+      const labels = [...new Set(v.errors.map((e) => fieldLabel(e.path)))].filter(
+        (s): s is string => Boolean(s),
+      );
+      const message =
+        labels.length > 0 ? `請補充或更正：${labels.join('、')}` : '任務參數不完整，請補充後重試';
       return {
         success: false,
-        error: { code: 'INVALID_INPUT', message: `入參校驗失敗：${detail}`, retryable: false },
+        error: { code: 'INVALID_INPUT', message, retryable: false },
       };
+    }
+  }
+
+  // 查詢類快取：idempotent capability（現網全為 search_* / list_* 查詢動作）
+  // 命中直接返回，避免 TTL 內重複雲端呼叫；寫操作（idempotent: false）永不快取
+  const cacheable = cap.idempotent === true && !options.skipCache;
+  if (cacheable) {
+    const hit = cache.get<SkillResult>(skillId, action, input);
+    if (hit) {
+      logInfo(`SKILL 快取命中 ${skillId}.${action}`);
+      return hit;
     }
   }
 
@@ -74,6 +102,10 @@ export async function invoke(
   try {
     const result = await inst.invoke(action, input, ctx);
     logInfo(`SKILL 完成 ${skillId}.${action} 耗時 ${Date.now() - t0}ms`);
+    // 查詢類成功結果寫入快取（寫操作結果具有副作用，永不快取）
+    if (cacheable && result.success) {
+      cache.set(skillId, action, input, result);
+    }
     return result;
   } catch (err) {
     logError(`SKILL 拋錯 ${skillId}.${action}`, err);

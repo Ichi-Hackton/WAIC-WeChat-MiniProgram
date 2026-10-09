@@ -131,6 +131,15 @@ function validateAgainst(
           path: path === '' ? req : `${path}.${req}`,
           message: `缺少必填欄位 ${req}`,
         });
+      } else if (typeof obj[req] === 'string' && (obj[req] as string).trim() === '') {
+        // 收緊語義（2026-10）：必填欄位空字串視同缺失。LLM 規劃對無法
+        // 確定的參數（如城市未知時的 city）偶爾輸出 "" 而非追問用戶，
+        // 僅檢查缺席攔不住，髒請求會打到雲端才被 badRequest 拒絕
+        //（實測復現：查詢任務攜 city:"" → 400 city 必填）
+        errors.push({
+          path: path === '' ? req : `${path}.${req}`,
+          message: `必填欄位 ${req} 不得為空字串`,
+        });
       }
     }
   }
