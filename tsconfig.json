@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2020",
     "module": "ESNext",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "lib": ["ES2020", "DOM"],
     "strict": true,
     "noImplicitAny": true,
@@ -12,11 +12,7 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "noEmit": true,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["miniprogram/src/*"]
-    }
+    "noEmit": true
   },
   "include": ["miniprogram/**/*.ts"],
   "exclude": ["node_modules", "dist"]

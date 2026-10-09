@@ -2,15 +2,19 @@
   "name": "micromate-cloudrun",
   "version": "0.1.0",
   "private": true,
-  "description": "MicroMate 雲托管容器服務 — LLM 代理與 SKILL 端點（零運行時依賴，僅 Node 內建模組）",
+  "description": "MicroMate 雲托管容器服務 — LLM 代理與 SKILL 端點（真實渠道版：mysql2 落庫 + 12306-mcp 子進程）",
   "scripts": {
     "build": "tsc -p .",
     "start": "node dist/server.js",
     "type-check": "tsc -p . --noEmit"
   },
   "license": "UNLICENSED",
+  "dependencies": {
+    "12306-mcp": "0.3.10",
+    "mysql2": "^3.11.0"
+  },
   "devDependencies": {
     "@types/node": "^20.14.0",
-    "typescript": "^5.6.3"
+    "typescript": "^7.0.2"
   }
 }

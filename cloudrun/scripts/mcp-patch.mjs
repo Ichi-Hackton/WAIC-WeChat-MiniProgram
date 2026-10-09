@@ -17,9 +17,11 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 
-// 腳本位於 <repo>/cloudrun/scripts/ → 倉庫根為上上級；.mcp/ 不入庫故路徑由腳本推導
-const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const target = join(repoRoot, '.mcp', '12306', 'node_modules', '12306-mcp', 'build', 'index.js');
+// 目標路徑優先讀 MCP_PATCH_TARGET 環境變數（容器構建期指向 /app/node_modules/…）；
+// 缺省時腳本位於 <repo>/cloudrun/scripts/ → 倉庫根 .mcp/12306/…（本地開發）
+const target = process.env.MCP_PATCH_TARGET
+  ? resolve(process.env.MCP_PATCH_TARGET)
+  : join(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'), '.mcp', '12306', 'node_modules', '12306-mcp', 'build', 'index.js');
 
 const MARK = 'PATCH-STATION-CACHE';
 

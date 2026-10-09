@@ -1,8 +1,8 @@
 ﻿# MicroMate 本地雲托管服務啟動腳本（開發直連模式）
 #
 # 用法：在 cloudrun/ 目錄下執行 .\dev-start.ps1
-#   1. 讀取 .env.local 注入環境變數（LLM_BASE_URL / LLM_API_KEY / LLM_MODEL，
-#      該檔已被 .gitignore 忽略）
+#   1. 讀取 .env.local 注入環境變數（LLM_BASE_URL / LLM_API_KEY / LLM_MODEL /
+#      TIANDITU_KEY / WEATHERCN_KEY，該檔已被 .gitignore 忽略）
 #   2. 編譯 TypeScript（tsc -p .）
 #   3. 以 PORT=8787 啟動服務 —— 小程序端 services/cloud.ts 開發環境
 #      直連此埠（LOCAL_RUN_BASE），無需開通微信雲開發即可跑通
