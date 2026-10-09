@@ -1,8 +1,8 @@
 <view class="page">
-  <!-- ═══ 啟動載入畫面：米白底＋襯線字標＋水平細線展開（侘寂極簡）═══ -->
+  <!-- ═══ 啟動載入畫面：米白底＋頭像圖片＋襯線字標＋水平細線展開（侘寂極簡）═══ -->
   <view wx:if="{{splash}}" class="splash {{splashFading ? 'splash-fade' : ''}}">
     <view class="splash-inner">
-      <text class="splash-mark">{{brandAvatar}}</text>
+      <image class="splash-mark" src="{{avatarImg}}" mode="aspectFill"></image>
       <view class="splash-text">
         <text class="splash-name">{{brandName}}</text>
         <text class="splash-tagline">{{splashTagline}}</text>
@@ -17,7 +17,8 @@
       <text class="status-dot dot-{{state === 'failed' ? 'failed' : (state === 'completed' ? 'ok' : (state === 'idle' ? 'idle' : 'busy'))}}">·</text>
       <text>{{stateLabel}}</text>
     </view>
-    <text class="llm-label">{{llmLabel}}</text>
+    <view class="profile-btn" hover-class="btn-hover" bindtap="onTapTrips">行程</view>
+    <view class="profile-btn" hover-class="btn-hover" bindtap="onTapProfile">我的</view>
     <view class="reset-btn" hover-class="btn-hover" bindtap="onTapReset">重置</view>
   </view>
 
@@ -30,9 +31,11 @@
         <view class="user-bubble">{{item.content}}</view>
       </view>
 
-      <!-- AI 訊息：頭像 + 平鋪寬內容（不套氣泡，交付卡有完整展示空間） -->
+      <!-- AI 訊息：頭像圖片 + 平鋪寬內容（不套氣泡，交付卡有完整展示空間） -->
       <view wx:else class="msg-ai" id="{{item.id}}">
-        <view class="ai-avatar">{{brandAvatar}}</view>
+        <view class="ai-avatar">
+          <image class="ai-avatar-img" src="{{avatarImg}}" mode="aspectFill"></image>
+        </view>
         <view class="ai-body">
           <!-- 合規：所有 LLM 輸出需掛 AI 生成標識 -->
           <view class="ai-head">
@@ -82,8 +85,44 @@
                 </view>
               </view>
 
-              <!-- 訂單交付卡：襯線標題 + hairline 憑證區 -->
-              <view wx:elif="{{card.type === 'order'}}" class="card-delivery">
+              <!-- 航班交付卡：大字路線頭 + 航司 / 機場航站樓明細行，每班掛快捷預訂 -->
+              <view wx:elif="{{card.type === 'flight'}}" class="card-delivery">
+                <view class="route-head">
+                  <view class="route">
+                    <text class="route-city">{{card.routeFrom}}</text>
+                    <view class="route-mid">
+                      <view class="route-line"></view>
+                      <text class="route-ico">✈</text>
+                      <view class="route-line"></view>
+                    </view>
+                    <text class="route-city">{{card.routeTo}}</text>
+                  </view>
+                  <view class="source-tag {{card.sourceReal ? 'source-real' : 'source-mock'}}">{{card.sourceLabel}}</view>
+                </view>
+                <view class="route-sub">
+                  <text class="route-date">{{card.routeDate}}</text>
+                  <text class="route-more">{{card.moreLabel}}</text>
+                </view>
+                <view class="train-list">
+                  <view wx:for="{{card.flights}}" wx:for-item="f" wx:key="flightNo" class="train-row">
+                    <view class="train-info">
+                      <view class="train-top">
+                        <text class="train-no">{{f.flightNo}}</text>
+                        <text class="train-duration">{{f.durationLabel}}</text>
+                      </view>
+                      <view class="train-time">{{f.departTime}} — {{f.arriveTime}}</view>
+                      <text class="train-remain">{{f.airline}} · {{f.fromAirport}} → {{f.toAirport}}</text>
+                    </view>
+                    <view class="train-act">
+                      <text class="train-price">{{f.priceLabel}}</text>
+                      <view class="book-btn" hover-class="btn-hover" bindtap="onTapBookFlight" data-flight-no="{{f.flightNo}}" data-ctx="{{card.bookCtx}}">預訂</view>
+                    </view>
+                  </view>
+                </view>
+              </view>
+
+              <!-- 跳轉下單交付卡：憑證要素 + 複製資訊 / 前往下單（真實交易在官方渠道側完成） -->
+              <view wx:elif="{{card.type === 'jump'}}" class="card-delivery">
                 <view class="order-head">
                   <text class="order-mark">·</text>
                   <text class="delivery-title">{{card.title}}</text>
@@ -94,83 +133,55 @@
                     <text class="order-value {{line.highlight ? 'order-highlight' : ''}}">{{line.value}}</text>
                   </view>
                 </view>
+                <view class="jump-note">{{card.note}}</view>
+                <view class="order-act">
+                  <view class="copy-btn" hover-class="btn-hover" bindtap="onTapCopyJumpInfo" data-text="{{card.copyText}}">複製資訊</view>
+                  <view wx:if="{{card.jumpBtn}}" class="pay-btn" hover-class="btn-hover" bindtap="onTapJumpMini" data-appid="{{card.jumpBtn.appId}}" data-path="{{card.jumpBtn.path}}">{{card.jumpBtn.label}}</view>
+                </view>
               </view>
 
-              <!-- 門市交付卡 -->
-              <view wx:elif="{{card.type === 'store'}}" class="card-delivery">
-                <view class="order-head">
-                  <text class="order-mark">·</text>
-                  <text class="delivery-title">{{card.title}}</text>
+              <!-- 天氣交付卡：城市 + 現象 + 大字溫度，濕度 / 風力 / 發布時間明細行 -->
+              <view wx:elif="{{card.type === 'weather'}}" class="card-delivery">
+                <view class="weather-head">
+                  <view class="weather-main">
+                    <text class="weather-city">{{card.city}}</text>
+                    <text class="weather-condition">{{card.condition}}</text>
+                  </view>
+                  <view class="source-tag {{card.sourceReal ? 'source-real' : 'source-mock'}}">{{card.sourceLabel}}</view>
                 </view>
-                <view class="store-list">
-                  <view wx:for="{{card.stores}}" wx:for-item="s" wx:key="name" class="store-row">
-                    <view class="store-name">
-                      <text>{{s.name}}</text>
-                      <view class="store-open {{s.openLabel === '營業中' ? 'open-yes' : 'open-no'}}">{{s.openLabel}}</view>
-                    </view>
-                    <view class="store-addr">{{s.address}}<text wx:if="{{s.distanceLabel}}" class="store-dist"> · {{s.distanceLabel}}</text></view>
+                <view class="weather-temp">{{card.tempLabel}}</view>
+                <view class="order-body">
+                  <view wx:for="{{card.lines}}" wx:for-item="line" wx:key="label" class="order-line">
+                    <text class="order-label">{{line.label}}</text>
+                    <text class="order-value">{{line.value}}</text>
                   </view>
                 </view>
               </view>
 
-              <!-- 商品交付卡：左信息右操作，每件掛快捷加購 -->
-              <view wx:elif="{{card.type === 'product'}}" class="card-delivery">
+              <!-- 通用兜底交付卡：未知 action 的成功結果（interaction/card-render 渲染） -->
+              <view wx:elif="{{card.type === 'generic'}}" class="card-delivery">
                 <view class="order-head">
                   <text class="order-mark">·</text>
                   <text class="delivery-title">{{card.title}}</text>
-                  <text class="product-kw">{{card.keywordLabel}}</text>
+                  <text wx:if="{{card.subtitle}}" class="product-kw">{{card.subtitle}}</text>
                 </view>
-                <view class="product-list">
-                  <view wx:for="{{card.products}}" wx:for-item="p" wx:key="productId" class="product-row {{p.soldOut ? 'product-soldout' : ''}}">
-                    <view class="product-info">
-                      <view class="product-top">
-                        <text class="product-name">{{p.name}}</text>
-                        <text wx:if="{{p.ratingLabel}}" class="product-rating">★ {{p.ratingLabel}}</text>
-                      </view>
-                      <view class="product-meta">{{p.category}} · {{p.stockLabel}}</view>
-                    </view>
-                    <view class="train-act">
-                      <text class="train-price">{{p.priceLabel}}</text>
-                      <view wx:if="{{!p.soldOut}}" class="book-btn" hover-class="btn-hover" bindtap="onTapAddProduct" data-name="{{p.name}}">加購</view>
-                      <view wx:else class="book-btn book-btn-off">售罄</view>
-                    </view>
+                <view class="order-body">
+                  <view wx:for="{{card.lines}}" wx:for-item="line" wx:key="label" class="order-line">
+                    <text class="order-label">{{line.label}}</text>
+                    <text class="order-value">{{line.value}}</text>
                   </view>
                 </view>
               </view>
 
-              <!-- 預約服務交付卡：時段 chips 瀏覽，每項掛快捷預約（首個可約時段） -->
-              <view wx:elif="{{card.type === 'booking'}}" class="card-delivery">
-                <view class="order-head">
-                  <text class="order-mark">·</text>
-                  <text class="delivery-title">{{card.title}}</text>
-                  <text class="product-kw">{{card.date}}</text>
-                </view>
-                <view class="booking-list">
-                  <view wx:for="{{card.services}}" wx:for-item="sv" wx:key="serviceId" class="booking-row">
-                    <view class="booking-info">
-                      <view class="booking-top">
-                        <text class="booking-name">{{sv.name}}</text>
-                      </view>
-                      <view class="booking-meta">{{sv.provider}} · {{sv.durationLabel}}</view>
-                      <view class="slot-row">
-                        <view wx:for="{{sv.slots}}" wx:for-item="slot" wx:key="startTime" class="slot-chip {{slot.available ? 'slot-open' : 'slot-full'}}">{{slot.startTime}}</view>
-                      </view>
-                    </view>
-                    <view class="train-act">
-                      <text class="train-price">{{sv.priceLabel}}</text>
-                      <view wx:if="{{sv.anyAvailable}}" class="book-btn" hover-class="btn-hover" bindtap="onTapBookService" data-service-name="{{sv.name}}" data-date="{{card.date}}" data-first-slot="{{sv.firstSlot}}">預約 {{sv.firstSlot}}</view>
-                      <view wx:else class="book-btn book-btn-off">已滿約</view>
-                    </view>
-                  </view>
-                </view>
-              </view>
-
-              <!-- 計劃步驟卡：序號方塊 + 摘要 + 狀態徽章 -->
+              <!-- 計劃步驟卡：序號方塊 + 時間標籤 + 中文摘要 + 狀態徽章（不展示 skillId 等技術標識） -->
               <view wx:else class="plan-card">
                 <view class="step-no step-{{card.payload.status}}">{{card.payload.seq}}</view>
                 <view class="step-body">
-                  <view class="step-title">{{card.title}}</view>
-                  <text wx:if="{{card.payload.skill}}" class="step-skill">{{card.payload.skill}}</text>
+                  <view class="step-title-row">
+                    <text class="step-title">{{card.title}}</text>
+                    <!-- 時間線標籤（行程 DAG 任務攜帶，如「10/11 下周六」） -->
+                    <text wx:if="{{card.payload.timeLabel}}" class="step-time">{{card.payload.timeLabel}}</text>
+                  </view>
                   <text wx:if="{{card.payload.error}}" class="step-error">{{card.payload.error}}</text>
                 </view>
                 <text wx:if="{{card.payload.statusLabel}}" class="task-badge task-{{card.payload.status}}">{{card.payload.statusLabel}}</text>
@@ -182,9 +193,11 @@
       </view>
     </block>
 
-    <!-- loading：AI 頭像（思考中流光）+ 階段文案 + 打字點 -->
+    <!-- loading：AI 頭像圖片（思考中流光）+ 階段文案 + 打字點 -->
     <view wx:if="{{loading}}" class="msg-ai is-loading" id="loading-bubble">
-      <view class="ai-avatar">{{brandAvatar}}</view>
+      <view class="ai-avatar">
+        <image class="ai-avatar-img" src="{{avatarImg}}" mode="aspectFill"></image>
+      </view>
       <view class="ai-body">
         <view class="ai-head">
           <text class="ai-name">{{brandName}}</text>
@@ -202,25 +215,37 @@
     </view>
   </scroll-view>
 
-  <!-- ═══ 場景範例（僅首輪顯示；splash 結束後錯落入場）═══ -->
+  <!-- ═══ 快捷入口（僅首輪顯示；常用話語個人化，無記錄時回退出廠範例；splash 結束後錯落入場）═══ -->
   <view wx:if="{{messages.length <= 1 && !splash}}" class="examples">
-    <text class="examples-title">我可以幫你辦：</text>
-    <view class="example-chip" hover-class="btn-hover" bindtap="onTapExample" data-text="明天北京到上海的高鐵，二等座">查高鐵車次</view>
-    <view class="example-chip" hover-class="btn-hover" bindtap="onTapExample" data-text="幫我點一杯拿鐵">點杯咖啡</view>
-    <view class="example-chip" hover-class="btn-hover" bindtap="onTapExample" data-text="上海附近的星巴克">找門市</view>
-    <view class="example-chip" hover-class="btn-hover" bindtap="onTapExample" data-text="幫我買一副無線降噪耳機">買降噪耳機</view>
-    <view class="example-chip" hover-class="btn-hover" bindtap="onTapExample" data-text="預約明天的羽毛球場">約羽毛球場</view>
+    <text class="examples-title">{{chipsTitle}}</text>
+    <view
+      wx:for="{{exampleChips}}"
+      wx:key="text"
+      class="example-chip"
+      hover-class="btn-hover"
+      bindtap="onTapExample"
+      data-text="{{item.text}}"
+    >{{item.label}}</view>
   </view>
 
-  <!-- ═══ 輸入區：底部 hairline + 居中輸入框 + 細描邊圓鈕（侘寂極簡）═══ -->
+  <!-- ═══ 輸入區：底部 hairline + 麥克風（錄音能力就緒時）+ 居中輸入框 + 細描邊圓鈕 ═══ -->
   <view class="input-bar">
     <view class="input-shell">
+      <view
+        wx:if="{{voiceReady}}"
+        class="voice-btn {{recording || transcribing ? 'voice-btn-on' : ''}}"
+        hover-class="btn-hover"
+        bindtap="onTapVoice"
+      >
+        <view class="mic-icon {{recording || transcribing ? 'mic-icon-on' : ''}}"></view>
+      </view>
       <input
-        class="input"
+        class="input {{recording || transcribing ? 'input-recording' : ''}}"
         value="{{inputText}}"
+        disabled="{{recording || transcribing}}"
         bindinput="onInput"
         bindconfirm="onSend"
-        placeholder="用一段自然語言描述你的需求……"
+        placeholder="{{transcribing ? '識別中……' : recording ? '正在聽你說……' : '用一段自然語言描述你的需求……'}}"
         placeholder-class="input-ph"
         confirm-type="send"
       />

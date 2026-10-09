@@ -1,0 +1,91 @@
+<view class="trips-page">
+
+  <!-- ═══ 朋友分享的行程（?shared=shareId 打開時的頂部只讀區塊）═══ -->
+  <view wx:if="{{sharedBlock}}" class="shared-block">
+    <view class="shared-title">朋友分享的行程</view>
+    <view wx:if="{{sharedBlock.loading}}" class="shared-hint">正在載入…</view>
+    <view wx:elif="{{sharedBlock.failed}}" class="shared-hint">分享已失效或網路不暢，可讓同伴重新分享。</view>
+    <view wx:else class="trip-card shared-card">
+      <view class="trip-head">
+        <view class="trip-date">
+          <text class="trip-date-md">{{sharedBlock.dateBadge}}</text>
+          <text wx:if="{{sharedBlock.dateLabel}}" class="trip-date-label">{{sharedBlock.dateLabel}}</text>
+        </view>
+        <view class="trip-info">
+          <view class="trip-city">{{sharedBlock.city}}</view>
+          <view class="trip-activity">{{sharedBlock.activity}}</view>
+        </view>
+        <view class="trip-side">
+          <text class="trip-status trip-planned">共享</text>
+        </view>
+      </view>
+      <view class="trip-timeline shared-timeline">
+        <view wx:for="{{sharedBlock.timeline}}" wx:for-item="node" wx:key="idx" class="tl-node">
+          <view class="tl-rail">
+            <view class="tl-dot {{node.statusLabel === '已完成' ? 'tl-dot-done' : ''}}">{{node.statusLabel === '已完成' ? '✓' : ''}}</view>
+            <view wx:if="{{index < sharedBlock.timeline.length - 1}}" class="tl-link"></view>
+          </view>
+          <view class="tl-body">
+            <text class="tl-time">{{node.timeLabel}}</text>
+            <text class="tl-title">{{node.title}}</text>
+          </view>
+          <text class="tl-status">{{node.statusLabel}}</text>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 空態：行程簿為空時的引導 -->
+  <view wx:if="{{trips.length === 0}}" class="empty">
+    <text class="empty-title">還沒有行程</text>
+    <text class="empty-sub">回到首頁說出「什麼時候去哪裡幹什麼」，確認行程後會自動建檔在這裡。</text>
+  </view>
+
+  <!-- 行程卡：日期徽章 + 城市 / 活動 + 狀態徽章，點卡片頭展開時間線 -->
+  <view wx:for="{{trips}}" wx:key="id" class="trip-card">
+    <view class="trip-head" hover-class="card-hover" bindtap="onTapToggle" data-id="{{item.id}}">
+      <view class="trip-date">
+        <text class="trip-date-md">{{item.dateBadge}}</text>
+        <text wx:if="{{item.dateLabel}}" class="trip-date-label">{{item.dateLabel}}</text>
+      </view>
+      <view class="trip-info">
+        <view class="trip-city">{{item.city}}</view>
+        <view class="trip-activity">{{item.activity}}</view>
+      </view>
+      <view class="trip-side">
+        <text class="trip-status trip-{{item.statusClass}}">{{item.statusLabel}}</text>
+        <text class="trip-caret">{{item.expanded ? '−' : '+'}}</text>
+      </view>
+    </view>
+
+    <!-- 豎向時間線：節點（時間標籤 + 任務標題 + 狀態徽章），完成項打勾 -->
+    <view wx:if="{{item.expanded}}" class="trip-timeline">
+      <view wx:for="{{item.timeline}}" wx:for-item="node" wx:for-index="nodeIdx" wx:key="taskId" class="tl-node">
+        <view class="tl-rail">
+          <view class="tl-dot {{node.done ? 'tl-dot-done' : ''}}">{{node.done ? '✓' : ''}}</view>
+          <view wx:if="{{nodeIdx < item.timeline.length - 1}}" class="tl-link"></view>
+        </view>
+        <view class="tl-body">
+          <text class="tl-time">{{node.timeLabel}}</text>
+          <text class="tl-title">{{node.title}}</text>
+          <!-- 跳轉下單入口（2026-10 跳轉模式：節點攜帶 jump 包時掛複製 / 去下單；
+               支付閉環：攜帶訂單號時掛「標記已支付」，自證成交後轉為已成交標記） -->
+          <view wx:if="{{node.copyText}}" class="tl-jump-act">
+            <view class="tl-copy-btn" hover-class="btn-hover" bindtap="onTapNodeCopy" data-text="{{node.copyText}}">複製資訊</view>
+            <view wx:if="{{node.jumpBtn && !node.paid}}" class="tl-jump-btn" hover-class="btn-hover" bindtap="onTapNodeJump" data-appid="{{node.jumpBtn.appId}}" data-path="{{node.jumpBtn.path}}">去下單</view>
+            <view wx:if="{{node.confirmBtn && !node.paid}}" class="tl-paid-btn" hover-class="btn-hover" bindtap="onTapNodePaid" data-tripid="{{node.confirmBtn.tripId}}" data-taskid="{{node.confirmBtn.taskId}}">標記已支付</view>
+            <text wx:if="{{node.paid}}" class="tl-paid-done">✓ 已成交</text>
+          </view>
+        </view>
+        <text class="tl-status tl-{{node.statusClass}}">{{node.statusLabel}}</text>
+      </view>
+      <!-- 操作區：分享同伴（評審 #4 增長）/ 訂閱提醒（模板配置後渲染）/ 刪除 -->
+      <view class="trip-actions">
+        <button class="tl-act-btn" open-type="share" data-id="{{item.id}}" hover-class="btn-hover">分享給同伴</button>
+        <button wx:if="{{subReady}}" class="tl-act-btn {{item.subscribed ? 'tl-act-done' : ''}}" hover-class="btn-hover" bindtap="onTapSubscribe" data-id="{{item.id}}">{{item.subscribed ? '已訂閱提醒' : '訂閱出發提醒'}}</button>
+        <view class="trip-remove" hover-class="btn-hover" bindtap="onTapRemove" data-id="{{item.id}}">刪除行程</view>
+      </view>
+    </view>
+  </view>
+
+</view>

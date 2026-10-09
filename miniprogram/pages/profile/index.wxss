@@ -1,0 +1,198 @@
+/* ============================================================
+   個人資料（實名證件 + 收貨地址）—— 侘寂極簡 Wabi-Sabi Restraint
+
+   視覺系統與地址編輯頁 / 首頁同族（.qoder/rules/Agent.md 視覺語言）：
+   - 米白紙感基底 + 深褐文字 + 暖金克制強調
+   - 襯線字分區標題 + 1px hairline 暖灰分隔 + 極小圓角
+   ============================================================ */
+
+page {
+  background: #F5F1E8;
+}
+
+.page {
+  min-height: 100vh;
+  padding: 32rpx 40rpx calc(48rpx + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  color: #2B2018;
+  background: #F5F1E8;
+}
+
+/* ---------- 分區（證件 / 地址各一節） ---------- */
+
+.section {
+  margin-bottom: 48rpx;
+  animation: riseIn 0.6s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* 第二分區延遲入場（錯落節奏；不用 nth-child，部分真機 WXSS 不支援） */
+.section-late {
+  animation-delay: 0.08s;
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(12rpx);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 分區頭：襯線字標居左，「＋ 新增」暖金細字居右 */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8rpx 20rpx;
+}
+
+.section-title {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 30rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 4rpx;
+}
+
+.section-add {
+  font-size: 24rpx;
+  font-weight: 400;
+  color: #8B7355;
+  letter-spacing: 2rpx;
+  padding: 8rpx 12rpx;
+}
+
+/* ---------- 列表卡（白卡＋hairline 暖灰邊，與表單卡同族） ---------- */
+
+.list-card {
+  background: #FCFAF5;
+  border: 1rpx solid #E8E0D0;
+  border-radius: 8rpx;
+  padding: 4rpx 36rpx;
+}
+
+/* 空態提示（引導語，弱化暖灰） */
+.empty-hint {
+  padding: 36rpx 0;
+  font-size: 24rpx;
+  font-weight: 300;
+  color: #9A8B72;
+  letter-spacing: 1rpx;
+  line-height: 1.7;
+}
+
+/* 空簿一鍵導入微信地址（暖色描邊次操作，與地址編輯頁同族） */
+.empty-import-btn {
+  margin: 4rpx 0 28rpx;
+  height: 84rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #F1EADB;
+  border: 1rpx solid #D8CBB4;
+  border-radius: 8rpx;
+  color: #6B5D4A;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 26rpx;
+  font-weight: 500;
+  letter-spacing: 4rpx;
+  transition: opacity 0.25s ease;
+}
+
+/* 列表行：主信息居左，› 指示居右 */
+.list-row {
+  display: flex;
+  align-items: center;
+  padding: 28rpx 0;
+  border-bottom: 1rpx solid #E8E0D0;
+}
+
+.list-row:last-child {
+  border-bottom: none;
+}
+
+.row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.row-title-line {
+  display: flex;
+  align-items: center;
+}
+
+.row-title {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 28rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 1rpx;
+}
+
+/* 地址行的手機號（與姓名同行，弱化小字） */
+.row-title-sub {
+  margin-left: 16rpx;
+  font-size: 22rpx;
+  font-weight: 300;
+  color: #9A8B72;
+  letter-spacing: 1rpx;
+}
+
+/* 默認徽標：暖金描邊小籤（唯一克制強調） */
+.badge {
+  margin-left: 16rpx;
+  padding: 2rpx 12rpx;
+  border: 1rpx solid #C9B98F;
+  border-radius: 6rpx;
+  font-size: 18rpx;
+  font-weight: 400;
+  color: #8B7355;
+  letter-spacing: 2rpx;
+  line-height: 1.6;
+}
+
+/* 次行信息（脫敏證號 / 地區詳址） */
+.row-sub {
+  margin-top: 8rpx;
+  font-size: 22rpx;
+  font-weight: 300;
+  color: #6B5D4A;
+  letter-spacing: 1rpx;
+  line-height: 1.6;
+}
+
+.row-arrow {
+  margin-left: 16rpx;
+  color: #B3A78F;
+  font-size: 28rpx;
+  line-height: 1;
+}
+
+/* ---------- 隱私說明（末尾弱化小字） ---------- */
+
+.privacy-hint {
+  margin-top: 8rpx;
+  font-size: 20rpx;
+  font-weight: 300;
+  color: #B3A78F;
+  letter-spacing: 1rpx;
+  line-height: 1.7;
+}
+
+/* ---------- 交互回饋 ---------- */
+
+.btn-hover {
+  opacity: 0.6;
+}
+
+.row-hover {
+  background: #F5EFE3;
+}

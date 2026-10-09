@@ -1,0 +1,376 @@
+/**
+ * 我的行程頁樣式
+ *
+ * 基調與首頁一致：米白底 + 襯線字 + hairline 描邊（侘寂極簡）。
+ * 色板：底 #F5F1E8 / 卡 #FCFAF5 / 邊 #E8E0D0 / 主字 #2B2018 /
+ * 次字 #6B5D4A / 暖金 #8B7355 / 錯色 #A04A3C（與首頁徽章同源）。
+ */
+
+page {
+  background: #F5F1E8;
+  min-height: 100vh;
+}
+
+.trips-page {
+  padding: 24rpx 40rpx 48rpx;
+}
+
+/* ═══ 空態 ═══ */
+
+.empty {
+  margin-top: 220rpx;
+  padding: 0 60rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.empty-title {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 32rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 2rpx;
+}
+
+.empty-sub {
+  margin-top: 20rpx;
+  font-size: 24rpx;
+  line-height: 1.9;
+  color: #6B5D4A;
+  text-align: center;
+}
+
+/* ═══ 行程卡 ═══ */
+
+.trip-card {
+  background: #FCFAF5;
+  border: 1rpx solid #E8E0D0;
+  border-radius: 8rpx;
+  padding: 26rpx 28rpx;
+  margin-bottom: 24rpx;
+  animation: riseIn 0.6s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.trip-head {
+  display: flex;
+  align-items: center;
+}
+
+.card-hover {
+  opacity: 0.75;
+}
+
+/* 日期徽章：豎排 MM-DD 大字 + 口語標籤小字，左側 hairline 強調日期語義 */
+.trip-date {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-right: 24rpx;
+  margin-right: 24rpx;
+  border-right: 1rpx solid #E8E0D0;
+}
+
+.trip-date-md {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 30rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 1rpx;
+}
+
+.trip-date-label {
+  margin-top: 6rpx;
+  font-size: 20rpx;
+  color: #8B7355;
+}
+
+.trip-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.trip-city {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 30rpx;
+  font-weight: 500;
+  color: #2B2018;
+  letter-spacing: 2rpx;
+}
+
+.trip-activity {
+  margin-top: 6rpx;
+  font-size: 22rpx;
+  color: #6B5D4A;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trip-side {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  margin-left: 16rpx;
+}
+
+/* 行程狀態徽章（與首頁計劃卡 task-badge 同風格） */
+.trip-status {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  letter-spacing: 2rpx;
+}
+
+.trip-planned { color: #9A8B72; }
+.trip-done { color: #6B7A5A; }
+.trip-partial { color: #8A7048; }
+
+.trip-caret {
+  margin-left: 16rpx;
+  width: 36rpx;
+  height: 36rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28rpx;
+  color: #8B7355;
+  border: 1rpx solid #C9BDA1;
+  border-radius: 50%;
+}
+
+/* ═══ 豎向時間線 ═══ */
+
+.trip-timeline {
+  margin-top: 24rpx;
+  padding-top: 24rpx;
+  border-top: 1rpx solid #E8E0D0;
+}
+
+.tl-node {
+  display: flex;
+  align-items: stretch;
+}
+
+/* 左側軌道：節點圓點 + 豎向連接線 */
+.tl-rail {
+  flex-shrink: 0;
+  width: 40rpx;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.tl-dot {
+  flex-shrink: 0;
+  width: 28rpx;
+  height: 28rpx;
+  margin-top: 4rpx;
+  border: 1rpx solid #C9BDA1;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18rpx;
+  color: #FCFAF5;
+  box-sizing: border-box;
+}
+
+.tl-dot-done {
+  background: #8B7355;
+  border-color: #8B7355;
+}
+
+.tl-link {
+  flex: 1;
+  width: 1rpx;
+  min-height: 28rpx;
+  background: #E8E0D0;
+}
+
+.tl-body {
+  flex: 1;
+  min-width: 0;
+  padding: 0 0 28rpx 20rpx;
+  display: flex;
+  align-items: baseline;
+  /* 跳轉下單入口按鈕換行佔滿（2026-10 跳轉模式） */
+  flex-wrap: wrap;
+}
+
+/* 跳轉下單入口：節點攜帶 jump 包時的第二行「複製資訊 / 去下單」（真實交易在渠道側完成） */
+.tl-jump-act {
+  width: 100%;
+  margin-top: 12rpx;
+  display: flex;
+  justify-content: flex-start;
+}
+
+.tl-copy-btn,
+.tl-jump-btn {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  letter-spacing: 2rpx;
+  color: #8B7355;
+  border: 1rpx solid #C9B896;
+  border-radius: 6rpx;
+  padding: 8rpx 22rpx;
+}
+
+.tl-copy-btn {
+  margin-right: 14rpx;
+}
+
+/* 標記已支付（支付閉環：真實支付在渠道側，用戶自證成交；綠系區分於去下單） */
+.tl-paid-btn {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  letter-spacing: 2rpx;
+  color: #6B7A5A;
+  border: 1rpx solid #8A9B7A;
+  border-radius: 6rpx;
+  padding: 8rpx 22rpx;
+  margin-left: 14rpx;
+}
+
+/* 已成交標記（確認後替換按鈕組的終態展示） */
+.tl-paid-done {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  letter-spacing: 2rpx;
+  color: #6B7A5A;
+}
+
+.tl-time {
+  flex-shrink: 0;
+  margin-right: 16rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  color: #8B7355;
+  letter-spacing: 1rpx;
+}
+
+.tl-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 24rpx;
+  color: #2B2018;
+}
+
+.tl-status {
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 4rpx;
+  font-size: 20rpx;
+  letter-spacing: 1rpx;
+}
+
+.tl-succeeded { color: #6B7A5A; }
+.tl-failed { color: #A04A3C; }
+.tl-running { color: #8B7355; }
+.tl-pending { color: #9A8B72; }
+.tl-skipped { color: #9A8B72; }
+.tl-waiting_human { color: #8A7048; }
+.tl-jump-pending { color: #8A7048; }
+.tl-jump-paid { color: #6B7A5A; }
+
+/* ============================================================
+   時間線底部操作區（分享 / 訂閱提醒 / 刪除；2026-10 評審 #4）
+   ============================================================ */
+
+.trip-actions {
+  margin-top: 12rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+/* 操作按鈕（button 原生樣式重置：去邊框線 / 背景 / 行高，與 tl-copy-btn 同族） */
+.tl-act-btn {
+  margin: 6rpx 14rpx 6rpx 0;
+  padding: 8rpx 22rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  letter-spacing: 2rpx;
+  color: #8B7355;
+  border: 1rpx solid #C9B896;
+  border-radius: 6rpx;
+  background: transparent;
+  line-height: 1.6;
+}
+
+.tl-act-btn::after {
+  border: none;
+}
+
+/* 已訂閱態（灰化，不可再點語義） */
+.tl-act-done {
+  color: #B8AB93;
+  border-color: #E3DAC6;
+}
+
+/* ============================================================
+   朋友分享的只讀行程（?shared=shareId 頂部區塊）
+   ============================================================ */
+
+.shared-block {
+  margin-bottom: 32rpx;
+}
+
+.shared-title {
+  margin-bottom: 16rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 24rpx;
+  letter-spacing: 4rpx;
+  color: #6B5D4A;
+}
+
+.shared-hint {
+  padding: 24rpx 0;
+  text-align: center;
+  font-size: 22rpx;
+  color: #B8AB93;
+}
+
+.shared-card {
+  border-color: #C9B896;
+}
+
+.shared-timeline {
+  display: block;
+}
+
+/* 刪除入口：hairline 描邊細字按鈕（操作區內與分享 / 訂閱並排） */
+.trip-remove {
+  margin-top: 0;
+  padding: 14rpx 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 22rpx;
+  letter-spacing: 2rpx;
+  color: #A04A3C;
+  border: 1rpx solid #D8BCB2;
+  border-radius: 6rpx;
+}
+
+.btn-hover {
+  opacity: 0.5;
+}
+
+@keyframes riseIn {
+  from {
+    opacity: 0;
+    transform: translateY(24rpx);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

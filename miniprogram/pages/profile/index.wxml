@@ -1,0 +1,35 @@
+<view class="page">
+
+  <!-- ═══ 實名證件（乘車人簿；火車 / 機票下單自動帶入）═══ -->
+  <view class="section">
+    <view class="section-head">
+      <text class="section-title">實名證件</text>
+      <view class="section-add" hover-class="btn-hover" bindtap="onAddPassenger">＋ 新增</view>
+    </view>
+    <view class="list-card">
+      <view wx:if="{{passengers.length === 0}}" class="empty-hint">
+        尚未添加乘車人。添加後，購買車票 / 機票時將自動帶入默認乘車人，無需每次提供證件信息。
+      </view>
+      <view
+        wx:for="{{passengers}}"
+        wx:key="id"
+        class="list-row"
+        hover-class="row-hover"
+        bindtap="onTapPassenger"
+        data-id="{{item.id}}"
+      >
+        <view class="row-main">
+          <view class="row-title-line">
+            <text class="row-title">{{item.name}}</text>
+            <view wx:if="{{item.isDefault}}" class="badge">默認</view>
+          </view>
+          <text class="row-sub">{{item.idNoMasked}}</text>
+        </view>
+        <text class="row-arrow">›</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- 隱私說明（§ 10 紅線：個人敏感信息僅存本機） -->
+  <text class="privacy-hint">證件信息僅存於本機，用於下單時自動帶入，不上傳雲端。</text>
+</view>

@@ -1,0 +1,47 @@
+<view class="page">
+  <!-- ═══ 乘車人表單卡（白卡 + hairline 分隔，與地址表單同族）═══ -->
+  <view class="form-card">
+
+    <!-- 姓名 -->
+    <view class="field-row">
+      <text class="field-label">姓名</text>
+      <input
+        class="field-input"
+        value="{{name}}"
+        bindinput="onNameInput"
+        placeholder="與證件一致的姓名"
+        placeholder-class="field-placeholder"
+        maxlength="20"
+      />
+    </view>
+
+    <!-- 證件號碼 -->
+    <view class="field-row">
+      <text class="field-label">證件號碼</text>
+      <input
+        class="field-input"
+        value="{{idNo}}"
+        bindinput="onIdNoInput"
+        type="idcard"
+        placeholder="18 位身份證號"
+        placeholder-class="field-placeholder"
+        maxlength="18"
+      />
+    </view>
+
+    <!-- 設為默認乘車人 -->
+    <view class="field-row field-row-switch">
+      <view class="switch-copy">
+        <text class="field-label">設為默認乘車人</text>
+        <text class="switch-hint">購票下單時自動帶入</text>
+      </view>
+      <switch checked="{{isDefault}}" bindchange="onDefaultChange" color="#8B7355" />
+    </view>
+  </view>
+
+  <!-- ═══ 保存（深褐實底，唯一主操作）═══ -->
+  <view class="save-btn" hover-class="btn-hover" bindtap="onTapSave">{{editing ? '保存修改' : '新增乘車人'}}</view>
+
+  <!-- ═══ 刪除（僅編輯態；弱化紅字，破壞性操作前有 modal 確認）═══ -->
+  <view wx:if="{{editing}}" class="remove-btn" hover-class="btn-hover" bindtap="onTapRemove">刪除此乘車人</view>
+</view>

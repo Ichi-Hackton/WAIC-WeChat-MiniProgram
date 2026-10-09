@@ -2,7 +2,5 @@
   "usingComponents": {},
   "navigationBarTitleText": "MicroMate",
   "navigationBarBackgroundColor": "#0b0d12",
-  "navigationBarTextStyle": "white",
-  "enablePullDownRefresh": true,
-  "backgroundTextStyle": "light"
+  "navigationBarTextStyle": "white"
 }
