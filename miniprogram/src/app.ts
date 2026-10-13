@@ -33,6 +33,7 @@ import { SkillRegistry } from './skills/registry';
 import { instance as train12306 } from './skills/builtin/train-12306/index';
 import { instance as flightVariflight } from './skills/builtin/flight-variflight/index';
 import { instance as weatherQuery } from './skills/builtin/weather-query/index';
+import { instance as mapTianditu } from './skills/builtin/map-tianditu/index';
 import { instance as coffeeStarbucks } from './skills/builtin/coffee-starbucks/index';
 import { instance as shoppingMall } from './skills/builtin/shopping-mall/index';
 import { instance as bookingCenter } from './skills/builtin/booking-center/index';
@@ -130,6 +131,7 @@ function ensureSkillsRegistered(): void {
   SkillRegistry.register(train12306);
   SkillRegistry.register(flightVariflight);
   SkillRegistry.register(weatherQuery);
+  SkillRegistry.register(mapTianditu);
   SkillRegistry.register(coffeeStarbucks);
   SkillRegistry.register(shoppingMall);
   SkillRegistry.register(bookingCenter);

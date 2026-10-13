@@ -195,6 +195,27 @@ function extractTicketKeyword(intent: string): string | null {
   return null;
 }
 
+/**
+ * 從意圖提取附近搜尋品類詞（「附近的便利店」→ 便利店、「哪裡有打印店」→ 打印店）
+ *
+ * 兩種形態按優先級匹配：修飾詞前置（附近 / 周邊 / 最近 + 的 + 品類）與
+ * 品類後置疑問（品類 + 在哪 / 哪裡有）。助詞先剝除（請問 / 幫我 /
+ * 查找 / 有沒有 / 哪裡有…），捕獲組取連續漢字 / 字母段；捕獲尾部再剝
+ * 「在哪」疑問尾緅（「最近的地铁站在哪」→ 地铁站而非「地铁站在哪」）。
+ * 泛指詞（有什麼 / 啥…）視為無品類——由呼叫分支追問，不硬猜關鍵詞
+ */
+function extractNearbyKeyword(intent: string): string | null {
+  const cleaned = intent
+    .replace(/請問|请问|幫我|帮我|幫忙|帮忙|麻煩|麻烦|一下|有[没沒]有|哪[裡里]有|哪[裡里]可以找/g, '')
+    .replace(/查[一查詢个個]?|找[一找]?|搜[一索尋]?/g, '');
+  const m1 = cleaned.match(/(?:附近|周[邊边]|最近)的?([\u4e00-\u9fa5A-Za-z0-9]{2,10})/);
+  const cand1 = m1 ? m1[1].replace(/在哪[裡里]?$/, '') : null;
+  if (cand1 && !/^(有)?(什[麼么]|甚[麼么]|啥)/.test(cand1)) return cand1;
+  const m2 = cleaned.match(/([\u4e00-\u9fa5A-Za-z0-9]{2,10})(?:在哪[裡里]?)/);
+  if (m2 && !/^(有)?(什[麼么]|甚[麼么]|啥)/.test(m2[1])) return m2[1];
+  return null;
+}
+
 /** 中文數字映射（一 ~ 九、兩 = 2）——鐘點解析用 */
 const CN_DIGITS: Record<string, number> = {
   一: 1, 二: 2, 兩: 2, 两: 2, 三: 3, 四: 4,
@@ -385,44 +406,6 @@ function tripPlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
 }
 
 /**
- * 本地規則式閒聊短路（雲端 LLM 不可用時的降級分類）
- *
- * 僅覆蓋「位置 / 定位授權類元問題」這一高頻且可靜態回答的形態
- * （真實 badcase：「能不能獲取我的位置」被規劃器兜底文案答非所問）。
- * 其餘閒聊形態本地無法可靠識別，一律返回 null 交回任務規劃鏈路
- * （維持「寧可兜底、不誤吞任務」的保守語義，與分類器 Prompt 規則 3 對齊）。
- *
- * 排除條件：命中出行域任務詞（高鐵 / 機票 / 天氣等）的輸入即使含
- * 「位置」也不是元問題（如「查我位置的天氣」）——任務分支優先。
- */
-export function localChatReply(intent: string, ctx: AgentContext): string | null {
-  // 位置類元問題詞：間接提及位置 / 定位 / 「我在哪」
-  if (!/位置|定位|我在哪|哪個城市/.test(intent)) return null;
-  // 問句 / 授權語氣標記：無標記的（如「從我的位置出發」）是任務參數引用
-  if (!/[?？]|能不能|可不可以|可否|能否|是否|知道|獲取|获取|授權|授权|權限|权限/.test(intent)) {
-    return null;
-  }
-  // 任務域詞優先：含出行任務詞的複合句不是純元問題
-  if (/天氣|天气|氣溫|气温|高[铁鐵]|火[车車]|动[车車]|機票|机票|航班|飛機|飞机/.test(intent)) {
-    return null;
-  }
-
-  const { location, locationAuth } = ctx.userProfile;
-  if (locationAuth === 'granted' && location) {
-    return location.city
-      ? `可以，定位已授權，我目前知道你在${location.city}。位置只用於你明確要求的服務（如查天氣、規劃行程）。`
-      : '可以，定位已授權，座標已就緒（城市名暫未解析）。位置只用於你明確要求的服務（如查天氣、規劃行程）。';
-  }
-  if (locationAuth === 'denied') {
-    return '目前無法獲取：你尚未授權位置信息。可在小程序設置（右上角⋯ → 設置 → 位置信息）中開啟授權後再問我一次。';
-  }
-  if (locationAuth === 'error') {
-    return '目前獲取不到定位（非授權原因，可能是系統定位開關關閉或網路異常）。請稍後再試。';
-  }
-  return '本輪尚未嘗試獲取你的定位。你可以直接對我說「查天氣」或規劃行程，需要定位時我會向你請求。';
-}
-
-/**
  * 規則式規劃主入口
  *
  * @param intent 用戶自然語言意圖
@@ -550,6 +533,19 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   // 天氣域：只讀查詢；座標由 ctx.userProfile.location 提供（context 構建時
   // wx.getLocation 取得，見 core/context.ts fetchLocation）
   const wantsWeather = /天氣|天气|氣溫|气温|溫度|温度|幾度|几度|下雨/.test(intent);
+  // 附近地點搜尋域：POI 查詢（便利店 / 藥店 / 列印店…）。「附近 + 專屬域詞」
+  // 的組合歸各專屬域（「附近星巴克」歸咖啡域、「附近賣場」歸購物域），
+  // 此處以各域旗標排他，僅承接無專屬 SKILL 的品類詞；wantsTrain / wantsFlight
+  // 亦排他（「附近的高鐵站」實際語義偏車次查詢域，MVP 不搶接）
+  const wantsNearby =
+    /附近|周[邊边]|最近|哪[裡里]有|有[没沒]有/.test(intent) &&
+    !wantsCoffee &&
+    !wantsShopping &&
+    !wantsBooking &&
+    !wantsTicket &&
+    !wantsTrain &&
+    !wantsFlight &&
+    !wantsWeather;
 
   // 出發城市（單域分支共用）：用戶點名 > 地址簿默認地址 > 定位；
   // 均無時追問（舊「缺省北京」演示 hack 已廢除——會訂錯出發地）
@@ -841,6 +837,30 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     });
   }
 
+  // 附近地點搜尋：只讀單任務；座標寫字面值（與天氣分支同構）。
+  // 品類詞提取失敗（「附近有什麼」類泛問）→ 追問品類，不硬猜關鍵詞；
+  // wantsNearby 已排他全部專屬域，此處直接收斂不影響後續分支
+  const nearbyLoc = ctx.userProfile.location;
+  if (wantsNearby && nearbyLoc?.lat !== undefined && nearbyLoc?.lng !== undefined) {
+    const poiKeyword = extractNearbyKeyword(intent);
+    if (!poiKeyword) {
+      return {
+        tasks: [],
+        message: '想找附近什麼地點？例如便利店、藥店、銀行、列印店、地鐵站……告訴我品類，我幫你查最近的。',
+      };
+    }
+    tasks.push({
+      skillId: 'skill.map.tianditu',
+      action: 'search_poi',
+      input: { keyword: poiKeyword, lat: nearbyLoc.lat, lng: nearbyLoc.lng },
+      inputBindings: {},
+      dependsOn: [],
+      summary: nearbyLoc.city
+        ? `搜尋${nearbyLoc.city}附近的${poiKeyword}`
+        : `搜尋附近的${poiKeyword}`,
+    });
+  }
+
   if (tasks.length === 0) {
     // 天氣意圖但無定位：按授權狀態精確引導（座標為 get_weather 必填入參）
     if (wantsWeather) {
@@ -853,6 +873,19 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
       return {
         tasks: [],
         message: '查詢天氣需要定位：請確認已允許小程序使用你的位置，然後再試。',
+      };
+    }
+    // 附近搜尋意圖但無定位：與天氣同構的授權引導（座標為 search_poi 必填入參）
+    if (wantsNearby) {
+      if (ctx.userProfile.locationAuth === 'denied') {
+        return {
+          tasks: [],
+          message: '搜尋附近地點需要定位，而你尚未授權位置信息：請在小程序設置（右上角⋯ → 設置 → 位置信息）開啟授權後再試。',
+        };
+      }
+      return {
+        tasks: [],
+        message: '搜尋附近地點需要定位：請確認已允許小程序使用你的位置，然後再試。',
       };
     }
     // 諮詢域兕底：純情緒 / 陪聊表達（無任何任務域詞命中才到這裡——
@@ -892,5 +925,5 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
  */
 export const UNSUPPORTED_HINT =
   '尚未支援此意圖。目前可辦：高鐵車次查詢與跳轉 12306 購票、國內航班查詢與跳轉 OTA 購票、' +
-  '實時天氣查詢、星巴克門市查詢與點單、商品搜尋與加購結算、生活服務預約、' +
-  '演出票務搜尋與購票、情感陪伴對話、待支付訂單聚合引導，以及一句話出行行程規劃。';
+  '實時天氣查詢、附近地點搜尋（便利店 / 藥店 / 列印店等）、星巴克門市查詢與點單、商品搜尋與加購結算、' +
+  '生活服務預約、演出票務搜尋與購票、情感陪伴對話、待支付訂單聚合引導，以及一句話出行行程規劃。';

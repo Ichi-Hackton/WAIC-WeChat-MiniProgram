@@ -51,6 +51,7 @@ export function renderResult(plan: Plan): RenderCard[] {
 function pickResultType(skillId: string): RenderCard['type'] {
   if (skillId.includes('train')) return 'train';
   if (skillId.includes('weather')) return 'weather';
+  // map / coffee / shopping 等查詢域由頁面層專用卡承載，此處統一 info 兜底
   return 'info';
 }
 
@@ -84,6 +85,7 @@ const FIELD_LABELS: Record<string, string> = {
   name: '名稱',
   city: '城市',
   count: '數量',
+  keyword: '關鍵詞',
   weather: '天氣',
   temperature: '溫度',
   humidity: '濕度',

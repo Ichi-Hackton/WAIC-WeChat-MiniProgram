@@ -176,6 +176,10 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
      { "priceCent": { "fromTaskId": "task_001", "fromField": "priceCentByTrain.G531" } }，
      僅繫結 priceCent 一個鍵）——確認彈窗才能展示真實金額。
    嚴禁自造過濾語法（如 trains[?trainNo=='G531']）；path 只支援點號直達。
+   fromField 只能使用本規則列出的各域固定路徑，嚴禁自編欄位名或跨域
+   借用（如把票務的 firstAvailableSessionId 用於預約域、自編
+   data.firstTrainId / data.firstStoreId 之類不存在的欄位）——非法路徑
+   會在規劃校驗被直接攔截並降級，規劃白做。
    注意：下單任務（book_ticket / book_flight）為跳轉模式——生成資訊卡
    後跳轉官方渠道（12306 / OTA）完成真實下單與支付，無需也不應規劃任何
    支付類任務。

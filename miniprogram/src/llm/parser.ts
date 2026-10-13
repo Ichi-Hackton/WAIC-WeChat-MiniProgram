@@ -217,8 +217,8 @@ export function parsePlannerOutput(rawText: string, intent: string, planId: stri
  *   - 頂層便利欄位：出行域早期約定（search_train / search_flight
  *     響應頂層的 trainNo / date / priceCent / flightNo 與
  *     priceCentByTrain.* / priceCentByFlight.* 即時價映射）
- * 新增 SKILL 若引入新的頂層綁定欄位，需同步本白名單（rule-planner
- * 全部 fromField 均在此集合內，與 validatePlanBindings 共同維護）
+ * 2026-10-13 起降級為「未登記 BINDING_FIELDS_BY_ACTION 的 action」之回退
+ * 檢查（新增 SKILL 未同步全路徑白名單時不誤殺，行為同舊版）
  */
 const BINDING_FIELD_ROOTS = new Set([
   'data',
@@ -231,29 +231,87 @@ const BINDING_FIELD_ROOTS = new Set([
 ]);
 
 /**
+ * 按（來源任務 action）登記的可綁定輸出欄位完整路徑白名單，'*' 段為
+ * 動態鍵通配（priceCentByTrain.* 匹配 priceCentByTrain.G531）。
+ * 數據源 = 雲端 SKILL 真實輸出與小程序 mock 同構契約（2026-10-13 核對：
+ * booking / ticket 的 first* 便捷欄位、train / flight 頂層 bindings、
+ * 動態鍵映射）。舊版僅校驗首段，data.* 內深層幻覺（編造欄位名 /
+ * 鍵名 / 跨域借用）穿透到 Scheduler 運行時 BINDING_FAILED 回滾；
+ * 新版按 action 全路徑校驗，規劃期即攔截，錯誤信息附合法路徑清單
+ * （直接指導 prompt 修復——調試 LLM 規劃時的反饋回路縮短一輪）。
+ * 維護義務：新增 SKILL 的可綁定欄位須同步本表（rule-planner 全部
+ * fromField 均在各域清單內，blackbox-planner 斷言共同守護）
+ */
+const BINDING_FIELDS_BY_ACTION: Readonly<Record<string, readonly string[]>> = {
+  search_train: ['from', 'to', 'date', 'trainNo', 'departTime', 'priceCent', 'priceCentByTrain.*'],
+  search_flights: ['from', 'to', 'date', 'flightNo', 'departTime', 'priceCent', 'priceCentByFlight.*'],
+  search_store: ['data.stores.*.storeId'],
+  search_products: ['data.priceCentByProduct.*'],
+  search_services: [
+    'data.firstServiceId',
+    'data.firstAvailableServiceId',
+    'data.firstAvailableStartTime',
+    'data.firstPriceCent',
+    'data.firstAvailableStartTimeByService.*',
+    'data.priceCentByService.*',
+  ],
+  search_events: ['data.firstEventId', 'data.eventIdByName.*'],
+  list_sessions: [
+    'data.firstAvailableSessionId',
+    'data.firstAvailableTierId',
+    'data.firstAvailablePriceCent',
+    'data.sessionIdByTime.*',
+    'data.tierIdByTime.*',
+    'data.priceCentByTime.*',
+    'data.priceCentBySession.*',
+  ],
+};
+
+/** 路徑模式匹配：段數相等；'*' 段匹配任意非空段，其餘段精確相等 */
+function matchesFieldPattern(pattern: string, field: string): boolean {
+  const ps = pattern.split('.');
+  const fs = field.split('.');
+  if (ps.length !== fs.length) return false;
+  return ps.every((seg, i) => (seg === '*' ? fs[i] !== '' : seg === fs[i]));
+}
+
+/**
  * 校驗 Plan 內任務引用一致性：inputBindings.fromTaskId 與 dependsOn
  * 必須指向 Plan 內存在的其他任務（自引用取不到值 / 死鎖，同樣無效）；
- * fromField 首段必須命中 BINDING_FIELD_ROOTS 白名單（欄位路徑幻覺與
- * 引用幻覺同屬 LLM 規劃缺陷）。
+ * fromField 校驗分兩級——來源 action 已登記 BINDING_FIELDS_BY_ACTION 時
+ * 全路徑嚴格匹配（深層幻覺在此攔截），未登記時回退首段白名單
+ * BINDING_FIELD_ROOTS（欄位路徑幻覺與引用幻覺同屬 LLM 規劃缺陷）。
  * 返回錯誤描述列表（空陣列 = 通過）；由呼叫方（client.plan）決定是否
  * 降級規則規劃器兜底
  */
 export function validatePlanBindings(p: Plan): string[] {
-  const ids = new Set(p.tasks.map((t) => t.id));
+  const byId = new Map(p.tasks.map((t) => [t.id, t]));
   const errs: string[] = [];
   for (const t of p.tasks) {
     for (const [k, b] of Object.entries(t.inputBindings ?? {})) {
-      if (!b.fromTaskId || !ids.has(b.fromTaskId) || b.fromTaskId === t.id) {
+      if (!b.fromTaskId || !byId.has(b.fromTaskId) || b.fromTaskId === t.id) {
         errs.push(`task ${t.id} 的綁定 ${k} 引用無效任務「${b.fromTaskId}」`);
         continue;
       }
-      const root = (b.fromField ?? '').split('.')[0] ?? '';
-      if (!root || !BINDING_FIELD_ROOTS.has(root)) {
-        errs.push(`task ${t.id} 的綁定 ${k} 引用未知欄位路徑「${b.fromField}」`);
+      const field = b.fromField ?? '';
+      const fromTask = byId.get(b.fromTaskId);
+      if (!fromTask) continue; // 前置 byId.has 守衛令此行不可達，僅為 TS 窄化
+      const allowed = BINDING_FIELDS_BY_ACTION[fromTask.action];
+      if (allowed) {
+        if (!allowed.some((pat) => matchesFieldPattern(pat, field))) {
+          errs.push(
+            `task ${t.id} 的綁定 ${k} 引用 ${fromTask.action} 不存在的欄位路徑「${field}」（合法路徑：${allowed.join('、')}）`,
+          );
+        }
+      } else {
+        const root = field.split('.')[0] ?? '';
+        if (!root || !BINDING_FIELD_ROOTS.has(root)) {
+          errs.push(`task ${t.id} 的綁定 ${k} 引用未知欄位路徑「${field}」`);
+        }
       }
     }
     for (const d of t.dependsOn) {
-      if (!ids.has(d) || d === t.id) {
+      if (!byId.has(d) || d === t.id) {
         errs.push(`task ${t.id} 依賴無效任務「${d}」`);
       }
     }

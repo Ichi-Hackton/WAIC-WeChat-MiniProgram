@@ -539,6 +539,42 @@ function buildStoreCard(data: unknown): GenericCard | null {
   };
 }
 
+/** 距離（米）→ 展示文案：「850m」/「2.3km」；非法值回退「—」 */
+function fmtDistance(m: unknown): string {
+  if (typeof m !== 'number' || Number.isNaN(m) || m < 0) return '—';
+  return m >= 1000 ? `${(m / 1000).toFixed(1)}km` : `${Math.round(m)}m`;
+}
+
+/** search_poi 成功 → 附近地點清單卡（前五家，按距離升序；零結果時未找到提示卡）
+ *  數據源標籤（title 後綴）區分即時（騰訊位置服務 / 天地圖雙上游）/ 模擬數據，不誤導用戶 */
+function buildPoiCard(data: unknown): GenericCard | null {
+  const d = data as { keyword?: unknown; pois?: unknown; radiusM?: unknown; source?: unknown } | undefined;
+  const kw = typeof d?.keyword === 'string' && d.keyword ? d.keyword : '地點';
+  // 雲端雙上游（tencent_lbs / tianditu）皆為即時數據，僅 mock 來自小程序端降級
+  const sourceTag = d?.source === 'mock' ? '（模擬數據）' : '';
+  const pois = Array.isArray(d?.pois) ? (d?.pois as Array<Record<string, unknown>>) : [];
+  if (pois.length === 0) {
+    // 半徑內零結果是有效交付（非渲染失敗）：明確告知並提示換詞或擴大範圍
+    const radiusLabel = fmtDistance(d?.radiusM);
+    return {
+      type: 'generic',
+      key: `poi-empty-${kw}-${radiusLabel}`,
+      title: `附近「${kw}」未找到`,
+      lines: [{ label: '結果', value: `半徑 ${radiusLabel} 內沒有搜到「${kw}」，試試換個說法或說「搜遠一點的${kw}」。` }],
+    };
+  }
+  const lines = pois.slice(0, 5).map((p, i) => ({
+    label: `No.${i + 1} · ${fmtDistance(p.distanceM)}`,
+    value: `${asText(p.name)}（${asText(p.address)}）`,
+  }));
+  return {
+    type: 'generic',
+    key: `poi-${kw}-${pois.length}-${fmtDistance(pois[0].distanceM)}`,
+    title: `附近的「${kw}」${sourceTag}`,
+    lines,
+  };
+}
+
 /** place_order 成功 → 點單需求卡（跳轉星巴克完成真實交易） */
 function buildCoffeeOrderCard(data: unknown): JumpCard | null {
   const d = data as {
@@ -1478,6 +1514,7 @@ Page({
     else if (task.action === 'get_weather') card = buildWeatherCard(data);
     // 2026-10 六域回補：咖啡 / 購物 / 預約 / 票務 / 支付聚合
     else if (task.action === 'search_store') card = buildStoreCard(data);
+    else if (task.action === 'search_poi') card = buildPoiCard(data);
     else if (task.action === 'place_order') card = buildCoffeeOrderCard(data);
     else if (task.action === 'search_products') card = buildProductsCard(data);
     else if (task.action === 'add_to_cart') card = buildCartCard(data);
