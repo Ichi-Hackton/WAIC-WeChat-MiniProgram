@@ -45,6 +45,22 @@ page {
   transition: opacity 0.25s ease;
 }
 
+/* ---------- 帶入未保存提示條（暖色左線 + 淡金底，常駐至保存） ---------- */
+
+.import-hint {
+  margin: -12rpx 0 24rpx;
+  padding: 14rpx 20rpx;
+  border-left: 3rpx solid #C9B48E;
+  background: rgba(201, 180, 142, 0.12);
+  border-radius: 4rpx;
+  font-size: 22rpx;
+  font-weight: 300;
+  color: #8B7355;
+  letter-spacing: 1rpx;
+  line-height: 1.6;
+  animation: riseIn 0.4s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
 /* ============================================================
    表單卡（白卡＋hairline 暖灰邊）
    ============================================================ */

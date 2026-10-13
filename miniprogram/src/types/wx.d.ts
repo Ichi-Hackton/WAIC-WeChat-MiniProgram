@@ -42,6 +42,18 @@ declare const getApp: () => {
   [key: string]: unknown;
 };
 
+// ----- 頁面間事件通道（基礎庫 2.7.3+） -----
+
+/**
+ * wx.navigateTo 的 events 機制載體：開頁方在 success 回調取得 channel 後
+ * emit，被開頁方在 onLoad 以 getOpenerEventChannel().on 監聽。
+ * 用於跨頁面攜帶結構化草稿（URL query 不適合中文長文本）。
+ */
+interface EventChannel {
+  emit(event: string, ...args: unknown[]): void;
+  on(event: string, callback: (data?: unknown) => void): void;
+}
+
 // ----- wx 全域 -----
 
 declare const wx: {
@@ -72,7 +84,13 @@ declare const wx: {
   }): void;
 
   // 導航
-  navigateTo(opts: { url: string; success?: () => void; fail?: (err: unknown) => void }): void;
+  navigateTo(opts: {
+    url: string;
+    /** 向下一頁面派發的事件監聽（被開頁方經 getOpenerEventChannel().on 接收） */
+    events?: Record<string, (data?: unknown) => void>;
+    success?: (res: { eventChannel: EventChannel }) => void;
+    fail?: (err: unknown) => void;
+  }): void;
   redirectTo(opts: { url: string }): void;
   switchTab(opts: { url: string }): void;
   navigateBack(opts?: { delta?: number }): void;

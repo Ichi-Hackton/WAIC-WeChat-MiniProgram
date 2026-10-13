@@ -2,6 +2,11 @@
   <!-- ═══ 一鍵帶入微信地址（暖色描邊次操作，置於表單之上）═══ -->
   <view class="import-btn" hover-class="btn-hover" bindtap="onTapImportAddress">一鍵帶入微信地址</view>
 
+  <!-- ═══ 帶入未保存提示（常駐，防誤解為已保存直接返回丟失）═══ -->
+  <view wx:if="{{imported}}" class="import-hint">
+    已帶入微信地址，內容尚未保存——請檢查後點擊下方「{{editing ? '保存修改' : '新增地址'}}」完成保存。
+  </view>
+
   <!-- ═══ 地址表單卡（白卡 + hairline 分隔，與乘車人表單同族）═══ -->
   <view class="form-card">
 

@@ -95,8 +95,11 @@ Page({
   /**
    * 保存：校驗 → 新增 / 覆寫 → toast 回饋 → 返回上一頁
    *
-   * 校驗文案由 validatePassengerForm 統一給出（數據層純函數），
+   * 校驗文案由 validatePassengerForm 統一給出（數據層純函數；證號接入
+   * checkIdNo 三級校驗——隨手填的號過不了校驗碼，是最常見的未落盤原因），
    * 上限（PASSENGER_LIMIT）與默認唯一性等業務規則均在數據層收口。
+   * 失敗一律 modal 彈窗（2026-10 反饋修復：toast 短提示易漏看，
+   * 用戶誤以為已保存導致「填了卻沒存」；成功信號 = 綠勾 toast + 自動返回）。
    */
   onTapSave(this: PassengerEditPageThis): void {
     const input: PassengerFormInput = {
@@ -106,19 +109,29 @@ Page({
     };
     const err = validatePassengerForm(input);
     if (err) {
-      wx.showToast({ title: err, icon: 'none' });
+      wx.showModal({ title: '無法保存', content: err, showCancel: false, confirmText: '知道了' });
       return;
     }
     if (this.editId) {
       const updated = updatePassenger(this.editId, input);
       if (!updated) {
-        wx.showToast({ title: '乘車人已被刪除，請返回重試', icon: 'none' });
+        wx.showModal({
+          title: '無法保存',
+          content: '乘車人已被刪除，請返回重試',
+          showCancel: false,
+          confirmText: '知道了',
+        });
         return;
       }
     } else {
       const added = addPassenger(input);
       if (!added) {
-        wx.showToast({ title: `乘車人數量已達上限（${PASSENGER_LIMIT} 人）`, icon: 'none' });
+        wx.showModal({
+          title: '無法保存',
+          content: `乘車人數量已達上限（${PASSENGER_LIMIT} 人），請先刪除不再乘車的乘車人`,
+          showCancel: false,
+          confirmText: '知道了',
+        });
         return;
       }
     }

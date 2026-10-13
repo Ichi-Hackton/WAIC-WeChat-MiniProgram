@@ -115,7 +115,11 @@ Page({
 
   /**
    * 空簿一鍵帶入微信地址：導入即存（與表單頁僅回填不同——空簿場景
-   * 用戶意圖明確，直接落盤最快建立出發城市來源；首條自動設默認）
+   * 用戶意圖明確，直接落盤最快建立出發城市來源；首條自動設默認）。
+   *
+   * 微信地址缺必填欄位時（暱稱含數字 / 詳址過短等），攜草稿導去表單
+   * 頁補全（EventChannel 傳遞，URL query 不承載中文長文本），
+   * 避免「提示補全卻開了張空表單」造成導入內容丢失。
    */
   async onTapImportAddress(this: ProfilePageThis): Promise<void> {
     const picked = await pickWechatAddress();
@@ -126,9 +130,11 @@ Page({
     const input = fromWechatAddress(picked);
     const err = validateAddressForm(input);
     if (err) {
-      // 微信地址缺失欄位（如未填詳址）：導去表單頁補全而非靜默丟棄
-      wx.showToast({ title: `${err}，已為你打開表單補全`, icon: 'none' });
-      wx.navigateTo({ url: '/pages/address-edit/index' });
+      wx.showToast({ title: '微信地址信息不完整，已為你帶入表單', icon: 'none' });
+      wx.navigateTo({
+        url: '/pages/address-edit/index',
+        success: (res) => res.eventChannel.emit('address:draft', input),
+      });
       return;
     }
     const added = addAddress(input);

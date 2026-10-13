@@ -10,7 +10,11 @@
  *
  * 一鍵帶入微信地址：wx.chooseAddress 原生選擇器拉起後回填表單
  * （services/address 封裝 → storage/address 的 fromWechatAddress 映射），
- * 僅回填不落盤——由用戶檢查後主動保存。
+ * 僅回填不落盤——由用戶檢查後主動保存；回填後表單上方常駐
+ * 「尚未保存」提示條（防誤解為已保存直接返回丟失，2026-10 反饋修復）。
+ *
+ * 草稿接收：profile 空簿一鍵帶入遇欄位不完整時，經 EventChannel
+ * （事件 'address:draft'）攜 AddressFormInput 草稿跳入本頁補全。
  *
  * 與 src/storage/address 的關係：本頁只做表單狀態與交互，
  * 校驗 / 持久化 / 默認唯一性維護全部下沉數據層。
@@ -40,6 +44,8 @@ interface AddressEditPageData {
   detail: string;
   /** 設為默認地址 */
   isDefault: boolean;
+  /** 已帶入微信地址但尚未保存（表單上方常駐提示條的顯示開關） */
+  imported: boolean;
   /** 編輯態標記（切換標題 / 保存文案 / 顯示刪除按鈕） */
   editing: boolean;
   [key: string]: unknown;
@@ -51,6 +57,8 @@ interface AddressEditPageThis {
   setData: (patch: Partial<AddressEditPageData>) => void;
   /** 編輯態地址 ID（新增態為空串） */
   editId: string;
+  /** 頁面間事件通道（接收 profile 攜草稿跳入；基礎庫 2.7.3+） */
+  getOpenerEventChannel?: () => EventChannel;
   onLoad: (options: { id?: string } | undefined) => void;
   onNameInput: (e: { detail: { value: string } }) => void;
   onPhoneInput: (e: { detail: { value: string } }) => void;
@@ -69,10 +77,25 @@ Page({
     region: [],
     detail: '',
     isDefault: false,
+    imported: false,
     editing: false,
   } as AddressEditPageData,
 
   onLoad(this: AddressEditPageThis, options: { id?: string } | undefined): void {
+    // profile 空簿導入缺欄位時攜草稿跳入：回填已有內容待用戶補全（優先級低於顯式 id 編輯態）
+    const channel =
+      typeof this.getOpenerEventChannel === 'function' ? this.getOpenerEventChannel() : null;
+    channel?.on('address:draft', (draft) => {
+      const d = draft as Partial<AddressFormInput> | undefined;
+      if (!d) return;
+      this.setData({
+        receiverName: d.receiverName ?? '',
+        phone: d.phone ?? '',
+        region: [d.province ?? '', d.city ?? '', d.district ?? ''],
+        detail: d.detail ?? '',
+        imported: true,
+      });
+    });
     const id = typeof options?.id === 'string' ? options.id : '';
     if (!id) return;
     // 編輯態：載入既有地址回填表單；id 無效時提示後返回
@@ -123,7 +146,7 @@ Page({
    * 一鍵帶入微信地址：拉起原生選擇器，回填表單（不落盤，由用戶檢查後保存）
    *
    * 取消 / 授權拒絕 / 微信內未填地址均靜默返回（fail 分支歸一 null），
-   * 僅授權拒絕場景給出開啟引導提示。
+   * 僅授權拒絕場景給出開啟引導提示。回填後亮起「尚未保存」提示條。
    */
   async onTapImportAddress(this: AddressEditPageThis): Promise<void> {
     const picked = await pickWechatAddress();
@@ -137,6 +160,7 @@ Page({
       phone: form.phone,
       region: [form.province, form.city, form.district],
       detail: form.detail,
+      imported: true,
     });
   },
 
@@ -145,6 +169,8 @@ Page({
    *
    * 校驗文案由 validateAddressForm 統一給出（數據層純函數），
    * 上限（ADDRESS_LIMIT）與默認唯一性等業務規則均在數據層收口。
+   * 失敗一律 modal 彈窗（2026-10 反饋修復：toast 短提示易漏看，
+   * 用戶誤以為已保存導致「填了卻沒存」；成功信號 = 綠勾 toast + 自動返回）。
    */
   onTapSave(this: AddressEditPageThis): void {
     const [province = '', city = '', district = ''] = this.data.region;
@@ -159,19 +185,29 @@ Page({
     };
     const err = validateAddressForm(input);
     if (err) {
-      wx.showToast({ title: err, icon: 'none' });
+      wx.showModal({ title: '無法保存', content: err, showCancel: false, confirmText: '知道了' });
       return;
     }
     if (this.editId) {
       const updated = updateAddress(this.editId, input);
       if (!updated) {
-        wx.showToast({ title: '地址已被刪除，請返回重試', icon: 'none' });
+        wx.showModal({
+          title: '無法保存',
+          content: '地址已被刪除，請返回重試',
+          showCancel: false,
+          confirmText: '知道了',
+        });
         return;
       }
     } else {
       const added = addAddress(input);
       if (!added) {
-        wx.showToast({ title: `地址數量已達上限（${ADDRESS_LIMIT} 條）`, icon: 'none' });
+        wx.showModal({
+          title: '無法保存',
+          content: `地址數量已達上限（${ADDRESS_LIMIT} 條），請先刪除不再使用的地址`,
+          showCancel: false,
+          confirmText: '知道了',
+        });
         return;
       }
     }
