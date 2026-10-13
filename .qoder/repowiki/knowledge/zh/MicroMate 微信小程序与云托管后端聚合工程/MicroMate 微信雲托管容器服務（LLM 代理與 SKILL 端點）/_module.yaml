@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: cloudrun
-title: MicroMate 微信雲托管容器服務
+title: MicroMate 微信雲托管容器服務（LLM 代理與 SKILL 端點）
 scope:
     - cloudrun/
 source_files: []
