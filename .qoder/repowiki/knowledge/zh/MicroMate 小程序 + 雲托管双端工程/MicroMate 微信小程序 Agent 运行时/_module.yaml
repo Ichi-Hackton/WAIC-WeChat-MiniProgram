@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: miniprogram
-title: MicroMate Agent 小程序运行时
+title: MicroMate 微信小程序 Agent 运行时
 scope:
     - miniprogram/
 source_files: []

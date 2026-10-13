@@ -3,11 +3,11 @@ schema_version: 1
 locale: zh-CN
 branch: main
 nodes_managed: true
-exported_at: "2026-10-08T01:43:53Z"
+exported_at: "2026-10-09T07:12:40Z"
 modules:
     "":
-        dir_name: MicroMate 小程序与云托管双端工程
-        title: MicroMate 小程序与云托管双端工程
+        dir_name: MicroMate 小程序 + 雲托管双端工程
+        title: MicroMate 小程序 + 雲托管双端工程
         scope:
             - package.json
             - project.config.json
@@ -30,8 +30,8 @@ modules:
         depends_on: []
         related_to: []
     miniprogram:
-        dir_name: MicroMate Agent 小程序运行时
-        title: MicroMate Agent 小程序运行时
+        dir_name: MicroMate 微信小程序 Agent 运行时
+        title: MicroMate 微信小程序 Agent 运行时
         scope:
             - miniprogram/
         source_files: []
