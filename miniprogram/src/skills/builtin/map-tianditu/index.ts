@@ -10,9 +10,10 @@
  * 座標來源：規劃器從 ctx.userProfile.location 寫入 input（字面值）——
  * 與天氣 SKILL 同構，定位缺失時規劃器直接追問 / 引導授權，不生成任務。
  *
- * 與雲端 skill-map.ts 的端點路徑逐字對齊（雲端雙上游：騰訊位置服務優先、
- * 天地圖兜底，出參 source 標識實際回源方）；雲端不可用（負數碼 = 雲基礎
- * 設施錯誤）或兩把地圖金鑰（TENCENT_LBS_KEY / TIANDITU_KEY）均未配置 /
+ * 與雲端 skill-map.ts 的端點路徑逐字對齊（雲端三上游：高德優先、騰訊位
+ * 置服務次之、天地圖兜底，出參 source 標識實際回源方）；雲端不可用（負
+ * 數碼 = 雲基礎設施錯誤）或三把地圖金鑰（AMAP_KEY / TENCENT_LBS_KEY /
+ * TIANDITU_KEY）均未配置 /
  * 上游全部失敗（業務 503）時，以確定性模擬數據
  * 降級（djb2 雜湊 seed = 關鍵詞 + 網格座標，同詞同位置演示數據穩定），
  * 卡片以 source='mock' 標識「模擬數據」，不誤導用戶。
@@ -54,8 +55,8 @@ export interface PoiSearchInfo {
   radiusM: number;
   /** 按距離升序的結果列表（半徑內無結果時為空陣列） */
   pois: PoiItem[];
-  /** 數據源標識（tencent_lbs / tianditu / mock），卡片以此區分即時 / 模擬 */
-  source: 'tencent_lbs' | 'tianditu' | 'mock';
+  /** 數據源標識（amap / tencent_lbs / tianditu / mock），卡片以此區分即時 / 模擬 */
+  source: 'amap' | 'tencent_lbs' | 'tianditu' | 'mock';
 }
 
 export const meta = {
@@ -104,7 +105,7 @@ export const meta = {
               },
             },
           },
-          source: { type: 'string', description: 'tencent_lbs / tianditu / mock' },
+          source: { type: 'string', description: 'amap / tencent_lbs / tianditu / mock' },
         },
       },
       idempotent: true,
@@ -209,7 +210,7 @@ async function invokeSearchPoi(
     { sessionId: ctx.sessionId },
   );
   if (res.code === 0 && res.data) return { success: true, data: res.data };
-  // 雲端不可用（負數碼）或 TIANDITU_KEY 未配置 / 上游失敗（業務 503，見
+  // 雲端不可用（負數碼）或地圖金鑰均未配置 / 上游全部失敗（業務 503，見
   // skill-map.ts）→ mock 降級：POI 為只讀查詢無副作用，卡片標識
   // 「模擬數據」明示，保證本地演示與自動化驗證鏈路完整
   if (res.code < 0 || res.code === 503) {

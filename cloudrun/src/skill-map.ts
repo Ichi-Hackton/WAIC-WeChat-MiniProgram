@@ -5,10 +5,21 @@
  *   POST /api/skill/skill.map.tianditu/search_poi
  *   body: { keyword, lat, lng, radiusM?, limit? }（lat/lng 為 gcj02 座標）
  *
- * 雙上游可切換（2026-10-13 修訂：澳門 / 境外網絡訪問不了天地圖控制台，
- * 無法申請管理金鑰，故騰訊優先、天地圖兜底；兩把金鑰誰配了用誰）：
+ * 三上游可切換（2026-10-14 修訂：用戶取得高德 Web 服務金鑰，高德升為優先
+ * 上游——座標系原生 gcj02 零轉換、半徑原生支援；騰訊次之、天地圖兜底，
+ * 三把金鑰誰配了用誰；2026-10-13 騰訊 / 天地圖背景見各上游段）：
  *
- *   上游 A（優先）騰訊位置服務 WebServiceAPI（TENCENT_LBS_KEY）——
+ *   上游 A（優先）高德 Web 服務「周邊搜索」（AMAP_KEY，與 /api/geo/reverse
+ *     的 regeo 共用「Web服務」金鑰）——
+ *     GET https://restapi.amap.com/v3/place/around
+ *       ?location=lng,lat&keywords=…&radius=…&offset=25&sortrule=distance&key=…
+ *     契約要點（官方文檔 lbs.amap.com/api/webservice/guide/api/search）：
+ *     status '1' 成功（'0' 帶 info，如 INVALID_USER_KEY）；pois[] 每項
+ *     { name, address?, tel?, location: "lng,lat", pname?, adname? }；座標
+ *     原生 gcj02；address / tel 缺失形態為空陣列 []（typeof 窄化歸
+ *     undefined，address 再以 pname+adname 拼接兜底）；offset 單頁上限 25。
+ *
+ *   上游 B（次選）騰訊位置服務 WebServiceAPI（TENCENT_LBS_KEY）——
  *     GET https://apis.map.qq.com/ws/place/v1/search
  *       ?keyword=…&boundary=nearby(lat,lng,1000,auto_extend=1)&page_size=20&key=…
  *     契約要點（官方文檔 + 2026-10-13 實測）：status 0 成功（非 0 帶
@@ -20,7 +31,7 @@
  *     優勢：微信生態同源（map 組件底層即騰訊位置服務）、控制台境外可達
  *     （lbs.qq.com）、個人開發者地點搜索免費額度約 1 萬次 / 日。
  *
- *   上游 B（兜底）天地圖「地名搜索 2.0」（TIANDITU_KEY，與 /api/geo/reverse
+ *   上游 C（兜底）天地圖「地名搜索 2.0」（TIANDITU_KEY，與 /api/geo/reverse
  *     共用「服務端」金鑰；v1 /search 已下線）——
  *     GET https://api.tianditu.gov.cn/v2/search?postStr={…}&type=query&tk=…
  *     契約要點（2026-10-13 實測逐欄位核對）：status 為物件 { cndesc,
@@ -32,7 +43,7 @@
  * 不論上游：距離語義全部由本端 haversine 後置計算（過濾 radiusM 內 + 升序
  * + 截取 limit），正確性不依賴任何上游過濾行為，兩條上游出參同構。
  *
- * 兩把金鑰均未配置或上游失敗時返回業務失敗 code 503（HTTP 200，不觸發
+ * 三把金鑰均未配置或上游失敗時返回業務失敗 code 503（HTTP 200，不觸發
  * 小程序端網路層重試），小程序端 SKILL 以確定性模擬數據降級（卡片標識
  * 「模擬數據」，與天氣 SKILL 同構）。
  *
@@ -90,7 +101,7 @@ export interface PoiItem {
 }
 
 /** 回源上游標識（出參透傳，小程序端卡片以 source !== 'mock' 區分真實 / 模擬） */
-export type PoiSource = 'tencent_lbs' | 'tianditu';
+export type PoiSource = 'amap' | 'tencent_lbs' | 'tianditu';
 
 /** POI 快取條目（統一出參主體；keyword / radiusM 由入參回顯不參與快取） */
 interface PoiCacheEntry {
@@ -166,6 +177,84 @@ function isUpstreamOk(body: TdtSearchResp | null): boolean {
  */
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+
+/** 高德周邊搜索回應（僅聲明消費欄位） */
+interface AmapAroundResp {
+  /** '1' 成功；'0' 帶 info（如 INVALID_USER_KEY） */
+  status?: string;
+  info?: string;
+  pois?: unknown;
+}
+
+/**
+ * 呼叫高德周邊搜索（place/around v3，座標原生 gcj02——優先上游，見檔頭）
+ *
+ * 召回半徑固定 MAX_RADIUS_M：快取條目按 MAX_RADIUS_M 預過濾存儲（見
+ * lookupPois 快取粒度註釋），召回半徑小於它會使先窄後寬的跨半徑快取
+ * 復用缺數據（上游半徑上限 50000，MAX_RADIUS_M 在界內）。sortrule=distance
+ * 近者靠前；offset 單頁上限 25（與天地圖 UPSTREAM_COUNT=30 同量級）。
+ * 嚴格半徑語義仍由本端 haversine 後置把關，與其他上游一致。
+ *
+ * @returns 全部原始 POI（未過濾未排序，distanceM 佔位）；上游失敗返回 null
+ */
+async function callAmapAround(
+  keyword: string,
+  lat: number,
+  lng: number,
+  key: string,
+): Promise<PoiItem[] | null> {
+  const url =
+    `https://restapi.amap.com/v3/place/around?location=${lng.toFixed(6)},${lat.toFixed(6)}` +
+    `&keywords=${encodeURIComponent(keyword)}&radius=${MAX_RADIUS_M}&offset=25` +
+    `&sortrule=distance&key=${key}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) {
+      console.error(`[map] 高德服務回應 HTTP ${resp.status}`);
+      return null;
+    }
+    const body = (await resp.json().catch(() => null)) as AmapAroundResp | null;
+    if (!body || body.status !== '1') {
+      console.error(`[map] 高德服務業務失敗：status=${body?.status} ${body?.info ?? ''}`);
+      return null;
+    }
+    if (!Array.isArray(body.pois)) return []; // 業務正常但零結果：空陣列語義
+    // 防禦性逐項窄化：location "lng,lat" 或 name 缺失的髒數據直接丟棄；
+    // address / tel 缺失形態為空陣列 []（typeof 窄化歸 undefined）
+    const items: PoiItem[] = [];
+    for (const raw of body.pois) {
+      if (!raw || typeof raw !== 'object') continue;
+      const p = raw as Record<string, unknown>;
+      const name = strOrUndef(p.name);
+      const locStr = strOrUndef(p.location);
+      if (!name || !locStr) continue;
+      const [lngStr, latStr] = locStr.split(',');
+      const poiLng = Number(lngStr);
+      const poiLat = Number(latStr);
+      if (Number.isNaN(poiLat) || Number.isNaN(poiLng)) continue;
+      // 原生 gcj02，無需座標轉換；address 缺失時以省 + 區拼接（pname / adname 分欄）
+      const address =
+        strOrUndef(p.address) ??
+        [strOrUndef(p.pname), strOrUndef(p.adname)].filter(Boolean).join('');
+      items.push({
+        name,
+        address,
+        phone: strOrUndef(p.tel),
+        lat: Number(poiLat.toFixed(6)),
+        lng: Number(poiLng.toFixed(6)),
+        distanceM: 0, // 佔位，lookupPois 按中心統一 haversine 計算
+      });
+    }
+    return items;
+  } catch (e) {
+    console.error('[map] 高德服務不可達：', e instanceof Error ? e.message : e);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** 騰訊位置服務地點搜索回應（僅聲明消費欄位） */
 interface TencentSearchResp {
@@ -346,21 +435,26 @@ async function lookupPois(
     };
   }
 
-  // 雙上游選擇（見檔頭）：騰訊優先；騰訊未配置或調用失敗時若天地圖
-  // 金鑰在則回落天地圖——「失敗」僅指請求 / 業務錯（null），零結果（[]）
-  // 為正常語義不觸發回落。兩把金鑰皆無則交由 handler 統一翻譯為業務 503
+  // 三上游選擇（見檔頭）：高德優先；未配置或調用失敗依序回落騰訊、天地圖
+  // ——「失敗」僅指請求 / 業務錯（null），零結果（[]）為正常語義不觸發回落。
+  // 三把金鑰皆無則交由 handler 統一翻譯為業務 503
+  const amapKey = process.env.AMAP_KEY;
   const tencentKey = process.env.TENCENT_LBS_KEY;
   const tdtKey = process.env.TIANDITU_KEY;
-  if (!tencentKey && !tdtKey) return null;
+  if (!amapKey && !tencentKey && !tdtKey) return null;
 
   let source: PoiSource = 'tianditu';
   let raw: PoiItem[] | null = null;
-  if (tencentKey) {
+  if (amapKey) {
+    raw = await callAmapAround(keyword, lat, lng, amapKey);
+    if (raw) source = 'amap';
+  }
+  if (!raw && tencentKey) {
     raw = await callTencentSearch(keyword, lat, lng, tencentKey);
     if (raw) source = 'tencent_lbs';
   }
   if (!raw && tdtKey) {
-    // 入參 gcj02 → wgs84（天地圖座標系，見檔頭上游 B 契約要點）
+    // 入參 gcj02 → wgs84（天地圖座標系，見檔頭上游 C 契約要點）
     const wgs = gcj02ToWgs84(lat, lng);
     raw = await callTiandituSearch(keyword, wgs.lat, wgs.lng, radiusM, tdtKey);
   }
@@ -418,8 +512,8 @@ const handleSearchPoi: RouteHandler = async (body) => {
 
   const result = await lookupPois(keyword.trim(), lat, lng, radiusM, limit);
   if (!result) {
-    if (!process.env.TENCENT_LBS_KEY && !process.env.TIANDITU_KEY) {
-      return fail(503, '未配置 TENCENT_LBS_KEY / TIANDITU_KEY，POI 搜尋不可用');
+    if (!process.env.AMAP_KEY && !process.env.TENCENT_LBS_KEY && !process.env.TIANDITU_KEY) {
+      return fail(503, '未配置 AMAP_KEY / TENCENT_LBS_KEY / TIANDITU_KEY，POI 搜尋不可用');
     }
     return fail(503, 'POI 搜尋上游失敗（服務不可達或業務錯誤）');
   }

@@ -351,7 +351,7 @@ const handleCheckout: RouteHandler = async (body, ctx) => {
         console.error('[skill-shopping] 淘口令生成失敗，降級複製連結：', e instanceof Error ? e.message : e);
       }
     }
-    // 兕底：轉鏈失敗 / 歷史演示條目 → 複製明細（無真實跳轉）
+    // 兜底：轉鏈失敗 / 歷史演示條目 → 複製明細（無真實跳轉）
     jumps.push({
       channel: 'none',
       name: it.name,

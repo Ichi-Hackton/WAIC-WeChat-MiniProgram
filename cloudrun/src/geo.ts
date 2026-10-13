@@ -1,5 +1,5 @@
 /**
- * 逆地理編碼端點（天地圖 geocoder 代理）
+ * 逆地理編碼端點（高德 / 天地圖 geocoder 代理）
  *
  * 端點（與小程序端 services/geo.ts 呼叫路徑逐字對齊）：
  *   POST /api/geo/reverse   body: { lat, lng }（gcj02 座標）
@@ -8,13 +8,25 @@
  * latitude / longitude / accuracy 等），userProfile.location.city 須經逆
  * 地理編碼補全；且規範 §7.1 禁止小程序端直接對接第三方 API，故由雲端代理。
  *
- * 上游（2026-10 修訂：地址獲取由高德切換天地圖；原 adcode 鏈路唯一消費方
- * 天氣已切華風愛科開放平台，高德 regeo / resolveAdcode / AMAP_KEY 隨之下線）：
- *   天地圖 geocoder —— TIANDITU_KEY（console.tianditu.gov.cn 申請「服務端」
- *   類型金鑰）。座標系為 CGCS2000（≈WGS84），上游呼叫前先做 gcj02 逆偏移
- *   轉換（見 gcj02ToWgs84 區塊註釋）
+ * 雙上游可切換（2026-10-14 修訂：用戶取得高德 Web 服務金鑰後，高德 regeo
+ * 回歸為優先上游——座標系原生 gcj02 零轉換、province / city 獨立分欄，
+ * 天然對齊出參契約；天地圖降為兜底）：
  *
- * 天地圖 API 契約要點（官文檔 lbs.tianditu.gov.cn/server/geocoding.html）：
+ *   上游 A（優先）高德 regeo v3 —— AMAP_KEY（console.amap.com 申請
+ *     「Web服務」類型金鑰）。座標系原生 gcj02，與小程序全鏈路一致。
+ *
+ *   上游 B（兜底）天地圖 geocoder —— TIANDITU_KEY（console.tianditu.gov.cn
+ *     申請「服務端」類型金鑰）。座標系為 CGCS2000（≈WGS84），上游呼叫前先做
+ *     gcj02 逆偏移轉換（見 gcj02ToWgs84 區塊註釋）
+ *
+ * 高德 API 契約要點（官檔 lbs.amap.com/api/webservice/guide/api/georegeo）：
+ *   - GET https://restapi.amap.com/v3/geocode/regeo?location={lng},{lat}&key=金鑰
+ *     （location 經度在前，與天地圖 postStr 的 lon 在前同構）
+ *   - status='1' 成功 / '0' 失敗（info 帶原因，如 INVALID_USER_KEY）
+ *   - addressComponent.city 直轄市形態為空陣列 []（typeof 窄化歸 undefined
+ *     → 回退 province，與天地圖鏈路直轄市語義對齊）
+ *
+ * 天地圖 API 契約要點（官檔 lbs.tianditu.gov.cn/server/geocoding.html）：
  *   - GET https://api.tianditu.gov.cn/geocoder?postStr={...}&type=geocode&tk=金鑰
  *     postStr 為 URL 編碼 JSON：{ lon: 經度, lat: 緯度, ver: 1 }（lon 在前）
  *   - 密鑰參數名為 tk（官文檔表格寫 appkey，實際接口用 tk）
@@ -173,6 +185,73 @@ function strOrUndef(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
 
+/** 高德 regeo 回應（僅聲明消費欄位） */
+interface AmapRegeoResp {
+  /** '1' 成功 / '0' 失敗（info 帶原因） */
+  status?: string;
+  info?: string;
+  regeocode?: {
+    addressComponent?: {
+      province?: unknown;
+      /** 直轄市形態為空陣列 []，窄化歸 undefined 後回退 province */
+      city?: unknown;
+    };
+  };
+}
+
+/**
+ * 呼叫高德逆地理編碼（regeo v3，優先上游，見檔頭）
+ *
+ * GET https://restapi.amap.com/v3/geocode/regeo?location={lng},{lat}&key=金鑰
+ *   - status='1' 成功；'0' 為上游業務失敗（info 帶原因）
+ *   - 座標系原生 gcj02，無需座標轉換（與天地圖鏈路的雙道轉換對比）
+ *   - province / city 為獨立分欄（無天地圖組合串解析問題）；直轄市 city
+ *     為空陣列 []，窄化歸 undefined 後回退 province（city=「北京市」，
+ *     與天地圖鏈路直轄市語義對齊）
+ *
+ * @returns 市級城市資訊；金鑰未配置 / 網路失敗 / 業務失敗 / 城市不可解析時返回 null
+ */
+async function callAmapRegeo(
+  lat: number,
+  lng: number,
+): Promise<{ city: string; province?: string } | null> {
+  const key = process.env.AMAP_KEY;
+  if (!key) return null; // 金鑰未配置：由 handler 統一翻譯為業務 503
+
+  const url = `https://restapi.amap.com/v3/geocode/regeo?location=${lng.toFixed(6)},${lat.toFixed(6)}&key=${key}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) {
+      console.error(`[geo] 高德服務回應 HTTP ${resp.status}`);
+      return null;
+    }
+    const body = (await resp.json().catch(() => null)) as AmapRegeoResp | null;
+    if (!body || body.status !== '1') {
+      console.error(`[geo] 高德服務業務失敗：status=${body?.status} ${body?.info ?? ''}`);
+      return null;
+    }
+    const comp = body.regeocode?.addressComponent;
+    const province = strOrUndef(comp?.province);
+    const city = strOrUndef(comp?.city); // 直轄市 [] → undefined
+    if (!city && !province) {
+      console.error('[geo] 高德解析結果缺少 city / province（邊緣座標或境外）');
+      return null;
+    }
+    if (!city) {
+      // city 缺失但 province 存在（上方已排除兩者皆空）：直轄市回退語義
+      return province ? { city: province, province } : null;
+    }
+    return { city, province };
+  } catch (e) {
+    console.error('[geo] 高德服務不可達：', e instanceof Error ? e.message : e);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** 天地圖 geocoder 回應（僅聲明消費欄位） */
 interface TdtGeocoderResp {
   status?: string;
@@ -242,9 +321,9 @@ async function callTiandituGeocoder(
 }
 
 /**
- * 地址鏈路快取查詢 + 未命中回源天地圖（handleReverse 專用）
+ * 地址鏈路快取查詢 + 未命中回源（handleReverse 專用）
  *
- * @returns 快取或上游解析結果；金鑰未配置 / 上游失敗時返回 null（503 語義由呼叫方翻譯）
+ * @returns 快取或上游解析結果；金鑰均未配置 / 上游全部失敗時返回 null（503 語義由呼叫方翻譯）
  */
 async function lookupReverse(lat: number, lng: number): Promise<ReverseCacheEntry | null> {
   // 命中快取直接返回（過期條目視為未命中，下次成功後覆寫）
@@ -254,8 +333,10 @@ async function lookupReverse(lat: number, lng: number): Promise<ReverseCacheEntr
     return hit;
   }
 
-  // 未命中：以原始座標（非網格中心）請求上游，保證解析精度
-  const resolved = await callTiandituGeocoder(lat, lng);
+  // 未命中：以原始座標（非網格中心）請求上游，保證解析精度。
+  // 雙上游鏈（見檔頭）：高德優先；高德未配置或調用失敗（null）時回落
+  // 天地圖——「失敗」僅指請求 / 業務錯，與 skill-map.ts 三上游鏈同構
+  const resolved = (await callAmapRegeo(lat, lng)) ?? (await callTiandituGeocoder(lat, lng));
   if (!resolved) {
     return null;
   }
@@ -288,8 +369,8 @@ const handleReverse: RouteHandler = async (body) => {
   const entry = await lookupReverse(lat, lng);
   if (!entry) {
     // 金鑰未配置與上游失敗共用業務 503：呼叫方一律降級為無城市
-    if (!process.env.TIANDITU_KEY) {
-      return fail(503, '未配置 TIANDITU_KEY，逆地理編碼不可用');
+    if (!process.env.AMAP_KEY && !process.env.TIANDITU_KEY) {
+      return fail(503, '未配置 AMAP_KEY / TIANDITU_KEY，逆地理編碼不可用');
     }
     return fail(503, '逆地理編碼上游失敗（座標無法解析或服務不可達）');
   }

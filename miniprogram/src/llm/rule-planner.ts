@@ -888,7 +888,7 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
         message: '搜尋附近地點需要定位：請確認已允許小程序使用你的位置，然後再試。',
       };
     }
-    // 諮詢域兕底：純情緒 / 陪聊表達（無任何任務域詞命中才到這裡——
+    // 諮詢域兜底：純情緒 / 陪聊表達（無任何任務域詞命中才到這裡——
     // 混合語句已被上方任務分支接管）→ 陪伴對話任務（雲端 LLM 真實
     // 對話，多輪歷史由 SKILL 從 ctx.messages 抽取；危機詞已在頭部短路）
     if (wantsCounseling) {

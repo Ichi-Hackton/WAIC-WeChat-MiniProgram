@@ -373,7 +373,7 @@ export async function understand(
   return { kind: 'ok' };
 }
 
-/** action → 中文短語（summary 缺失或技術形態時的兕底，避免暴露 skillId.action 代碼）。
+/** action → 中文短語（summary 缺失或技術形態時的兜底，避免暴露 skillId.action 代碼）。
  * 2026-10 六域回補（跳轉模式）：各域寫操作統一為「生成需求卡跳轉官方
  * 渠道」，支付在渠道側完成（站內無代付任務，pay_orders 僅聚合引導）。 */
 const ACTION_LABELS: Record<string, string> = {
