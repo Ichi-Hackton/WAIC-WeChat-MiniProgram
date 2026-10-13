@@ -4,7 +4,8 @@
  * 規範來源：.qoder/rules/Agent.md § 12.1（utils 不得 import wx.*，保持純函式）
  *
  * 消費方：llm/rule-planner.ts 危機意圖短路（安全優先於一切業務域）；
- * 2026-10 技能收斂後 builtin/counseling 已下架，本詞表是其唯一小程序端入口
+ * 2026-10 六域回補後 builtin/counseling 重新上架，但危機短路仍在規劃層
+ * 本地攔截（雲端 / SKILL 不可達也能即刻回應），本詞表是第一道防線
  *
  * 維護須知：雲端 cloudrun/src/skill-counseling.ts 持有同款正則做最終把關
  * （兩包獨立部署無法共享代碼），修改詞表時**必須兩端同步**。

@@ -4,14 +4,16 @@
  * 規範來源：.qoder/rules/Agent.md § 15
  *
  * 此檔案位於 src/ 層，為**純模組**（頂層不得呼叫 App/Page）：
- *   1. 註冊所有 SKILL（出行域：12306 火車票 / 飛常準機票 / 天氣查詢）
+ *   1. 註冊所有 SKILL（9 域：出行 3 域 + 2026-10 回補的 6 域）
  *
- * 2026-10 技能收敛：星巴克 / 網購商城 / 生活預約 / 演出票務 / 心理諮詢 /
- * AI 卡支付六域下架（個人主體補不動真實交易渠道：星巴克與美團開放平台
- * 僅面向企業資質 ISV、大麥 / 秀動無公開 API、微信支付個人主體不可開通；
- * 購物域聯盟憑證未配置前演示商品亦屬假數據）。保留域全部為「查詢真實
- * 數據源 + 跳轉官方渠道下單」的個人可及鏈路；下架代碼見 git 歷史，
- * 企業主體與商務渠道就緒後按 SKILL 註冊架構回補即可。
+ * 2026-10 六域回補（跳轉模式）：星巴克 / 網購商城 / 生活預約 / 演出票務 /
+ * 心理諮詢 / 支付引導重新上架。個人主體拿不到真實交易 API（星巴克與
+ * 美團開放平台僅面向企業資質 ISV、大麥 / 秀動無公開 API、微信支付個人
+ * 主體不可開通），故寫操作一律降級為「需求卡 + 半屏跳轉官方小程序」
+ * （wx.openEmbeddedMiniProgram，白名單未命中時自動普通跳轉 / 複製
+ * 資訊），用戶在官方渠道內完成真實交易；諮詢域走雲端 LLM 真實對話；
+ * 支付域重定義為「聚合收銀台引導」（拉取全域 pending_external 訂單
+ * 逐單重建渠道跳轉包，無站內資金流）。
  *   2. 冪等初始化雲開發環境
  *   3. 建構 Orchestrator 並轉發狀態 / 任務 / 計劃事件供 UI 訂閱
  *   4. 暴露 handleIntent / resetAgent / getState 對外入口
@@ -31,6 +33,12 @@ import { SkillRegistry } from './skills/registry';
 import { instance as train12306 } from './skills/builtin/train-12306/index';
 import { instance as flightVariflight } from './skills/builtin/flight-variflight/index';
 import { instance as weatherQuery } from './skills/builtin/weather-query/index';
+import { instance as coffeeStarbucks } from './skills/builtin/coffee-starbucks/index';
+import { instance as shoppingMall } from './skills/builtin/shopping-mall/index';
+import { instance as bookingCenter } from './skills/builtin/booking-center/index';
+import { instance as ticketShow } from './skills/builtin/ticket-show/index';
+import { instance as counseling } from './skills/builtin/counseling/index';
+import { instance as paymentAicard } from './skills/builtin/payment-aicard/index';
 import { Orchestrator } from './core/orchestrator';
 import { buildContext } from './core/context';
 import { confirmPlan, awaitCheckpoint } from './interaction/checkpoint';
@@ -38,6 +46,7 @@ import { ensureCloudInit, isDevEnv, LOCAL_RUN_BASE } from './services/cloud';
 import { BRAND_NAME } from './types/brand';
 import { info as logInfo, error as logError, setRemoteSink } from './utils/logger';
 import { appendHistory } from './storage/session';
+import { confirmProposal, dismissPendingMemory } from './storage/preferences';
 import type { AgentResponse, AgentState } from './types/agent-state';
 import type { Plan } from './types/plan';
 import type { Task } from './types/task';
@@ -90,6 +99,12 @@ export interface AgentRuntimeEvents {
 export interface AgentRuntime {
   /** 處理用戶意圖（語音已 STT 為文字） */
   handleIntent(intent: string): Promise<AgentResponse>;
+  /** 確認記憶提議（確認卡「記住」按鈕）：UI 回傳卡面條目 → 長期偏好
+   * 落盤（所見即所寫，不依賴 storage 中間態），下一輪規劃自動採用。
+   * @returns 實際落盤的偏好鍵（空 = 無有效條目） */
+  confirmMemory(entries: Array<{ key: string; value: string }>): string[];
+  /** 拒絕記憶提議（確認卡「不用了」按鈕）：丟棄並記錄拒絕（同鍵同值不再重複提議） */
+  dismissMemory(): void;
   /** 重置 Agent（清空當前 Plan，保留會話上下文） */
   resetAgent(): void;
   /** 當前狀態機狀態（Orchestrator 未建立時為 idle） */
@@ -108,12 +123,19 @@ export interface AgentRuntime {
  */
 function ensureSkillsRegistered(): void {
   if (SkillRegistry.size() > 0) return;
-  // 2026-10 技能收敛：僅保留出行域三個「數據真實 + 個人主體可及」的 SKILL；
-  // 支付發生在渠道側收銀台（跳轉模式），無需 AI 專屬卡。其餘六域回補
-  // 條件見檔頂注釋。
+  // 2026-10 六域回補（跳轉模式）：咖啡 / 購物 / 預約 / 票務的寫操作為
+  // 「需求卡 + 渠道跳轉」（星巴克 / 京東 / 美團 / 大麥收銀台完成真實交易）；
+  // 諮詢域為雲端 LLM 真實對話；支付域為聚合收銀台引導（無站內資金流）。
+  // 出行三域維持「真實數據源 + 官方渠道跳轉下單」鏈路不變。
   SkillRegistry.register(train12306);
   SkillRegistry.register(flightVariflight);
   SkillRegistry.register(weatherQuery);
+  SkillRegistry.register(coffeeStarbucks);
+  SkillRegistry.register(shoppingMall);
+  SkillRegistry.register(bookingCenter);
+  SkillRegistry.register(ticketShow);
+  SkillRegistry.register(counseling);
+  SkillRegistry.register(paymentAicard);
 }
 
 /** Runtime 單例（重複呼叫 createAgentRuntime 返回同一實例） */
@@ -204,6 +226,20 @@ export function createAgentRuntime(cloudEnv: string = CLOUD_ENV): AgentRuntime {
           errorCode: 'UNEXPECTED',
         };
       }
+    },
+
+    /** 記憶確認卡回調：用戶點「記住」→ 以卡面條目落盤（分層記憶；
+     * 確認數據由 UI 回傳——所見即所寫，不依賴 storage 中間態） */
+    confirmMemory(entries: Array<{ key: string; value: string }>): string[] {
+      const written = confirmProposal(entries);
+      logInfo(written.length > 0 ? `記憶確認：已記住 ${written.join('、')}` : '記憶確認：無有效條目');
+      return written;
+    },
+
+    /** 記憶確認卡回調：用戶點「不用了」→ 丟棄提議並記錄拒絕 */
+    dismissMemory(): void {
+      dismissPendingMemory();
+      logInfo('記憶確認：用戶拒絕，已丟棄提議（同鍵同值不再重複詢問）');
     },
 
     /** 重置 Agent（給 UI 呼叫） */

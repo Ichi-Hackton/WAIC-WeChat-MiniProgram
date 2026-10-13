@@ -104,15 +104,16 @@ export interface SkillInstance<TInput = unknown, TOutput = unknown> {
 }
 
 /**
- * 外部渠道跳轉包（2026-10 真實渠道上線）
+ * 外部渠道跳轉包（2026-10 真實渠道上線；同月六域回補擴至全域）
  *
- * book_ticket / book_flight 等「跳轉下單」
- * 類寫操作的返回 data 均攜帶 jump 欄位，結構與雲端 external-jump.ts 的
- * buildJump 輸出逐字對齊。appId 為空串 = 該渠道暫未接入小程序跳轉，
- * 前端隱藏「前往下單」按鈕、僅保留複製資訊（copy-only 降級）。
+ * book_ticket / book_flight / place_order / checkout / create_reservation /
+ * create_order / pay_orders 等「跳轉下單」類寫操作的返回 data 均攜帶
+ * jump 欄位，結構與雲端 external-jump.ts 的 buildJump 輸出逐字對齊。
+ * appId 為空串 = 該渠道暫未接入小程序跳轉，前端隱藏「前往下單」按鈕、
+ * 僅保留複製資訊（copy-only 降級）。
  */
 export interface JumpPackage {
-  /** 跳轉渠道識別字（train_12306 / ota_flight / jd / meituan / taobao / none） */
+  /** 跳轉渠道識別字（train_12306 / ota_flight / jd / meituan / taobao / starbucks / damai / none） */
   target: string;
   /** 目標小程序 appId（空串 = copy-only） */
   appId: string;
@@ -120,10 +121,28 @@ export interface JumpPackage {
   path?: string;
   /** 京東聯盟小程序跳轉指令（轉鏈產物，僅 target=jd 攜帶） */
   jCommand?: string;
-  /** 複製資訊（購票 / 購物 / 預約需求摘要，跳轉後供官方渠道頁面比對） */
+  /** 複製資訊（購票 / 點單 / 購物 / 預約需求摘要，跳轉後供官方渠道頁面比對） */
   copyText: string;
   /** 模式說明（展示於跳轉卡底部） */
   note: string;
+}
+
+/**
+ * 購物結算逐商品跳轉項（checkout 返回的 jumps 陣列元素）
+ *
+ * 與雲端 skill-shopping.ts 的 JumpItem 逐字對齊：action='miniapp' 可跳
+ * 小程序（appId / jCommand 二選一），'copy' 僅複製（淘口令 / 轉鏈降級 / 演示）。
+ */
+export interface JumpItem {
+  /** 渠道識別字（jd / taobao / none…） */
+  channel: string;
+  /** 商品名 */
+  name: string;
+  /** miniapp = 跳小程序；copy = 僅複製 */
+  action: 'miniapp' | 'copy';
+  appId?: string;
+  jCommand?: string;
+  copyText: string;
 }
 
 /** 簡化版 SkillMeta，僅保留 LLM 規劃需要的欄位（降低 token 消耗） */

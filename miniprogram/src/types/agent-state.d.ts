@@ -24,12 +24,29 @@ export type AgentState =
  */
 export type AgentTransitionTable = Readonly<Record<AgentState, ReadonlyArray<AgentState>>>;
 
+/** 記憶提議條目（AgentResponse.memoryProposal 元素） */
+export interface MemoryProposalEntry {
+  /** 偏好鍵（storage/preferences 白名單域鍵，如 seat） */
+  key: string;
+  /** 中文域標籤（如「高鐵座位」） */
+  label: string;
+  /** 偏好值（已脫敏截斷，如「靠窗」） */
+  value: string;
+  /** suggested=推斷提議（一次性需求推斷習慣，待確認卡詢問「以後都這樣做嗎？」）；
+   * remembered=已直接記住（用戶顯式長期指令，回執卡告知，無按鈕） */
+  status: 'suggested' | 'remembered';
+}
+
 /** Agent 對外回應（給 UI 渲染用） */
 export interface AgentResponse {
   /** 主要給用戶看的訊息（已含 ai_generated 標識） */
   message: string;
   /** 結構化卡片（可選） */
   cards?: AgentCard[];
+  /** 記憶卡提議（可選）：顯式已記住的回執（remembered）與推斷提議的
+   * 確認卡（suggested，「以後都這樣做嗎？」）——用戶確認後經 runtime.
+   * confirmMemory / dismissMemory 落盤或丟棄（記憶須用戶知情可控，§ 10 精神） */
+  memoryProposal?: MemoryProposalEntry[];
   /** 最終狀態 */
   state: AgentState;
   /** 失敗時的錯誤碼 */

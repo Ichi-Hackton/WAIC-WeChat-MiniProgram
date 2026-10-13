@@ -3,6 +3,8 @@
  */
 
 export * from './session';
+export * from './preferences';
 export * from './cache';
 export * from './passenger';
+export * from './address';
 export * from './trip';

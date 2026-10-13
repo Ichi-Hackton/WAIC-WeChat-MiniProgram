@@ -14,6 +14,7 @@ import { buildContext, pushMessage } from './context';
 import { plan as llmPlan, understand, aggregate as llmAggregate, PlannerLLMError } from '../llm/client';
 import { run as runScheduler, SchedulerDeadlockError } from './scheduler';
 import { saveTripFromPlan, updateTripFromPlan } from '../storage/trip';
+import { takePendingProposal, takeRememberedProposal } from '../storage/preferences';
 import * as skillAdapter from '../skills/adapter';
 import { getCapability } from '../skills/adapter';
 import { SkillRegistry } from '../skills/registry';
@@ -115,9 +116,22 @@ export class Orchestrator {
   /**
    * 處理用戶輸入
    *
+   * 薄包裝：狀態機全流程（run）結束後，把規劃階段沉澱的記憶記錄附加到
+   * 最終響應（storage/preferences 分層記憶）——顯式已記住的回執卡
+   * （remembered，「已記住 ✓」告知）在前，推斷提議的確認卡（suggested，
+   * 「以後都這樣做嗎？」詢問）在後。讀即清保證不重複透出；BUSY /
+   * 遺留記錄也統一在此出清，無害。
+   *
    * @param intent 用戶自然語言意圖
    */
   async handle(intent: string): Promise<AgentResponse> {
+    const res = await this.run(intent);
+    const memoryProposal = [...(takeRememberedProposal() ?? []), ...(takePendingProposal() ?? [])];
+    return memoryProposal.length > 0 ? { ...res, memoryProposal } : res;
+  }
+
+  /** 狀態機全流程（原 handle 主體；private，僅經 handle 包裝對外） */
+  private async run(intent: string): Promise<AgentResponse> {
     logInfo(`Orchestrator.handle: "${intent.slice(0, 60)}"`);
     if (this.state !== 'idle' && this.state !== 'completed' && this.state !== 'failed') {
       return {
@@ -145,10 +159,25 @@ export class Orchestrator {
       pushMessage(this.ctx, { role: 'user', content: intent, timestamp: Date.now() });
       const u = await understand(intent, this.ctx);
       if (u.kind === 'clarify') {
-        // 狀態機歸位：提前返回必須轉回 idle，否則後續請求永久 BUSY
+        // 狀態機歸位：提前返回必須轉回 idle，否則後續請求永久 BUSY。
+        // 追問寫入對話記憶（規劃層的追問錨點——isTripFollowup / 實名補充
+        // 輪——靠 lastAssistant 識別追問上下文，不寫入則錨點恒不命中）
         this.transition('idle');
+        pushMessage(this.ctx, { role: 'assistant', content: u.clarification ?? '請補充資訊', timestamp: Date.now() });
         return {
           message: `${BRAND_AI_GENERATED_BY}：${u.clarification ?? '請補充資訊'}`,
+          state: 'idle',
+        };
+      }
+      if (u.kind === 'chat') {
+        // 閒聊 / 元問題短路（2026-10 修訂）：分類為非任務輸入時直接以對話
+        // 回答，不進任務規劃漏斗——避免元問題（如「能不能獲取我的位置」）
+        // 落到規劃器兜底的「功能清單推銷」文案。歸位語義同 clarify；
+        // 回答寫入對話歷史，支援多輪閒聊上下文延續
+        this.transition('idle');
+        pushMessage(this.ctx, { role: 'assistant', content: u.reply, timestamp: Date.now() });
+        return {
+          message: `${BRAND_AI_GENERATED_BY}：${u.reply}`,
           state: 'idle',
         };
       }
@@ -162,6 +191,9 @@ export class Orchestrator {
         // note = LLM 追問文案（如「請補充出行日期」）：引導用戶補充後重試，
         // 區別於「無法識別」（EMPTY_PLAN）
         if (planObj.note) {
+          // 追問寫入對話記憶（同 clarify 分支：實名補充輪錨點靠
+          // lastAssistant 識別「請補充乘車人 / 觀演人」上下文）
+          pushMessage(this.ctx, { role: 'assistant', content: planObj.note, timestamp: Date.now() });
           return {
             message: `${BRAND_AI_GENERATED_BY}：${planObj.note}`,
             state: 'idle',

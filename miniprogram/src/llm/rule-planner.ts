@@ -15,9 +15,10 @@
  *      本規劃器生成的下單任務照常觸發 checkpoint 確認（§ 10 紅線）
  *   3. 下單任務的乘客為演示資料，確認彈窗會完整展示入參
  *
- * 2026-10 技能收敛：僅保留出行域（火車 / 機票 / 天氣 / 行程），
- * 咖啡 / 購物 / 預約 / 票務 / 陪伴域規則隨 SKILL 下架一併移除；
- * 危機詞短路改為本地靜態關懷文案（不依賴任何 SKILL 與雲端可達性）。
+ * 2026-10 六域回補（跳轉模式）：咖啡 / 購物 / 預約 / 票務 / 陪伴 / 支付
+ * 規則隨 SKILL 重新上架一併恢復——寫操作任務的語義為「生成需求卡並
+ * 跳轉官方渠道」（真實交易在渠道收銀台完成）；危機詞短路仍為本地
+ * 靜態關懷文案（安全網不依賴任何 SKILL 與雲端可達性）。
  */
 
 import { addDays, formatDate } from '../utils/datetime';
@@ -51,6 +52,22 @@ const SEAT_MAP: Array<[RegExp, string]> = [
 function padTaskNo(n: number): string {
   return String(n).padStart(3, '0');
 }
+
+/**
+ * 出發城市取值（2026-10 修訂，用戶指令的取值鏈）：
+ *   地址簿默認地址市級 > 定位城市 > 無（追問用戶）
+ *
+ * ctx.userProfile.location.city 已由 core/context.ts 按此優先級合併並
+ * 歸一化（去行政區後綴），此處僅透傳；缺失時由呼叫方以追問收斂，
+ * **不再缺省北京**——演示缺省會真實訂錯出發地的票。
+ */
+function departureCity(ctx: AgentContext): string | null {
+  return ctx.userProfile.location?.city ?? null;
+}
+
+/** 出發城市追問文案（地址簿 / 定位均無來源時；提示兩條一勞永逸路徑） */
+const DEPARTURE_CITY_PROMPT =
+  '請問從哪座城市出發？你也可以在「我的」頁填寫常用地址，或開啟定位授權，之後我會自動帶入出發城市。';
 
 /**
  * 從意圖抽取日期：優先取 YYYY-MM-DD 字面值（與 LLM 規劃路徑規則 10 對齊，
@@ -114,19 +131,139 @@ function extractCabin(intent: string): string {
   return 'economy';
 }
 
+/** 從意圖識別飲品名（缺省拿鐵） */
+function extractDrink(intent: string): string {
+  if (/美式/.test(intent)) return '美式咖啡';
+  if (/摩卡/.test(intent)) return '摩卡';
+  return '拿鐵';
+}
+
+/** 商品關鍵詞 → [productId, 商品名]（與商城演示商品表對齊） */
+const PRODUCT_MAP: Array<[RegExp, string, string]> = [
+  [/耳機|耳机/, 'p_001', '無線降噪耳機 Pro'],
+  [/手錶|手表/, 'p_002', '智能手錶 S6'],
+  [/保溫杯|保温杯/, 'p_003', '恆溫保溫杯 500ml'],
+  [/咖啡豆/, 'p_004', '精品咖啡豆 1kg'],
+  [/按摩儀|按摩仪/, 'p_005', '頸部按摩儀'],
+  [/跑步鞋/, 'p_006', '輕量跑步鞋'],
+];
+
+/** 服務關鍵詞 → [serviceId, 服務名]（與預約中心演示服務目錄對齊） */
+const SERVICE_MAP: Array<[RegExp, string, string]> = [
+  [/羽毛球/, 'svc_001', '羽毛球場地'],
+  [/潔牙|洁牙/, 'svc_002', '口腔潔牙護理'],
+  [/體檢|体检/, 'svc_003', '健康體檢套餐 A'],
+  [/游泳|泳池/, 'svc_004', '恆溫泳池單次票'],
+  [/理髮|理发|剪髮|剪发|剪裁|設計師|设计师/, 'svc_005', '首席設計師剪裁'],
+];
+
+/**
+ * 演出關鍵詞 → 目錄檢索詞（與票務演示目錄 EVENTS 的繁體名對齊；
+ * 用戶口説常用簡體，直接以原文檢索會因繁簡差異落空，故做映射）
+ */
+const TICKET_KEYWORD_MAP: Array<[RegExp, string]> = [
+  [/周杰[伦倫]|杰伦/, '周杰倫'],
+  [/五月天/, '五月天'],
+  [/草莓/, '草莓'],
+  [/暗戀桃花源|暗恋桃花源|桃花源/, '暗戀桃花源'],
+  [/劇院魅影|剧院魅影|魅影|歌劇魅影|歌剧魅影/, '劇院魅影'],
+  [/音[樂乐][劇剧]/, '音樂劇'],
+  [/CBA|籃球|篮球|首[鋼钢]/, 'CBA'],
+];
+
+/** 從意圖提取點名的商品（未點名返回 null） */
+function extractProduct(intent: string): { productId: string; name: string } | null {
+  for (const [re, productId, name] of PRODUCT_MAP) {
+    if (re.test(intent)) return { productId, name };
+  }
+  return null;
+}
+
+/** 從意圖提取點名的服務（未點名返回 null） */
+function extractService(intent: string): { serviceId: string; name: string } | null {
+  for (const [re, serviceId, name] of SERVICE_MAP) {
+    if (re.test(intent)) return { serviceId, name };
+  }
+  return null;
+}
+
+/** 從意圖提取點名的演出檢索詞（未點名返回 null） */
+function extractTicketKeyword(intent: string): string | null {
+  for (const [re, keyword] of TICKET_KEYWORD_MAP) {
+    if (re.test(intent)) return keyword;
+  }
+  return null;
+}
+
+/** 中文數字映射（一 ~ 九、兩 = 2）——鐘點解析用 */
+const CN_DIGITS: Record<string, number> = {
+  一: 1, 二: 2, 兩: 2, 两: 2, 三: 3, 四: 4,
+  五: 5, 六: 6, 七: 7, 八: 8, 九: 9,
+};
+
+/**
+ * 解析鐘點數字（0-23）：阿拉伯（「8點」）或中文（「三點 / 十點 / 十二點 /
+ * 二十點 / 下午三點半」）。未點名鐘點返回 null
+ */
+function parseCnHour(intent: string): number | null {
+  const arabic = /([01]?\d|2[0-3])(?=[點点时時])/.exec(intent);
+  if (arabic) return Number(arabic[1]);
+  const m = /([一二兩两三四五六七八九]?十[一二兩两三四五六七八九]?|[一二兩两三四五六七八九])[點点时時]/.exec(
+    intent,
+  );
+  if (!m) return null;
+  const s = m[1];
+  if (s === '十') return 10;
+  if (s.startsWith('十')) return 10 + (CN_DIGITS[s[1]] ?? 0);
+  if (s.endsWith('十')) return (CN_DIGITS[s[0]] ?? 0) * 10;
+  return CN_DIGITS[s] ?? null;
+}
+
+/**
+ * 從意圖提取預約時段：優先「HH:mm」字面值，其次時段詞 + 鐘點數字組合
+ * （「下午三點」→ 15:00，「晚上八點半」→ 20:30——數字優先於時段詞兜底槽，
+ * 用戶點名鐘點被目錄槽覆蓋是實測回歸點），最後時段詞映射到服務目錄的
+ * 固定時刻槽（10/12/14/16/18/20 點），未點名返回 null
+ */
+function extractStartTime(intent: string): string | null {
+  const literal = intent.match(/([01]?\d|2[0-3]):[0-5]\d/);
+  if (literal) return literal[0];
+  const hour = parseCnHour(intent);
+  if (hour !== null) {
+    const minute = /[點点时時]半/.test(intent) ? 30 : 0;
+    let h = hour;
+    if (/下午|傍晚/.test(intent)) h = hour <= 12 ? hour + 12 : hour;
+    else if (/晚上|夜裡|夜里/.test(intent)) h = hour <= 11 ? hour + 12 : hour;
+    else if (!/早上|清晨|上午|中午/.test(intent)) h = hour <= 8 ? hour + 12 : hour;
+    if (h >= 0 && h <= 23) return `${String(h).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  }
+  if (/早上|清晨|上午/.test(intent)) return '10:00';
+  if (/中午/.test(intent)) return '12:00';
+  if (/下午/.test(intent)) return '14:00';
+  if (/傍晚/.test(intent)) return '16:00';
+  if (/晚上|夜裡|夜里/.test(intent)) return '18:00';
+  return null;
+}
+
+/** 行程活動槽位的票務詞判定（「看一場演唱會」等泛詞 → 展開演出搜尋） */
+const TICKET_ACTIVITY_RE = /演唱[會会]|話劇|话剧|音樂劇|音乐剧|音樂節|音乐节|演出|比[賽赛]|球[賽赛]|門票|门票/;
+
+/** 行程活動槽位的咖啡詞判定（「喝杯咖啡」→ 展開門市查詢） */
+const COFFEE_ACTIVITY_RE = /咖啡|星巴克|拿[铁鐵]|美式|摩卡/;
+
 /**
  * 行程複合意圖規劃（「什麼時候去什麼地方幹什麼」）
  *
- * 展開策略（2026-10 技能收敛後，票務 / 咖啡 / 預約域已下架，
- * 行程任務組瘦身為出行配套）：
+ * 展開策略（2026-10 六域回補後）：
  *   1. 目的地天氣（get_weather，座標命中演示城市表才生成）
  *   2. 城際交通（search_train；出發城市取用戶所在城市，缺失或與目的地
  *      相同時缺省北京）
- *
- * 活動槽位仍為三要素之一（行程建檔標籤），但不再展開活動域任務。
+ *   3. 活動域只讀搜尋（活動槽位命中票務 / 咖啡詞時並行追加 search_events /
+ *      search_store，與天氣 / 交通同層——DAG 展示編排能力，僅查詢）
  *
  * 寫操作安全口徑：僅當意圖含買詞（買 / 訂 / 下單）且指向車票
- * （點名「車票 / 高鐵票」）才追加 book_ticket——「想去看看」不直接下單。
+ * （點名「車票 / 高鐵票」）才追加 book_ticket——「想去看看」不直接下單；
+ * 演出 / 咖啡同理，行程語境不自動產生寫操作（下單由單域分支的買詞觸發）。
  *
  * 槽位不齊：回空 tasks + 追問文案（多輪收集；下一輪由
  * extractTripSlots 從對話歷史合併出新槽位，無需內存狀態）
@@ -158,9 +295,19 @@ function tripPlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     });
   }
 
-  // 2. 城際交通查詢（只讀；與既有單域分支同構的查詢參數）
-  const userCity = ctx.userProfile.location?.city;
-  const from = userCity && userCity !== slots.city ? userCity : '北京';
+  // 2. 城際交通查詢（只讀；與既有單域分支同構的查詢參數）。
+  //    出發城市按取值鏈（地址簿 > 定位 > 追問）；同城行程不硬造跨城任務，
+  //    向用戶確認真實出發地（舊缺省「北京」已廢除）
+  const from = departureCity(ctx);
+  if (!from) {
+    return { tasks: [], message: DEPARTURE_CITY_PROMPT };
+  }
+  if (from === slots.city) {
+    return {
+      tasks: [],
+      message: `你所在地（${from}）與目的地相同：還需要查從其他城市出發的交通嗎？請告訴我出發城市，或直接說「就在本市逛逛」。`,
+    };
+  }
   const searchTrainId = `task_${padTaskNo(tasks.length + 1)}`;
   tasks.push({
     skillId: 'skill.train.12306',
@@ -172,9 +319,9 @@ function tripPlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     summary: `查 ${slots.date} ${from}→${slots.city} 車次`,
   });
 
-  // 買詞判定：票務域已下架，「買 / 訂」泛詞不再預設指向車票（避免
-  // 「去看演唱會把票買了」被誤訂成車票）——僅點名「車票 / 高鐵票 /
-  // 火車票」才追加 book_ticket；門票類需求由兜底文案如實告知未支援
+  // 買詞判定：僅點名「車票 / 高鐵票 / 火車票」才追加 book_ticket——
+  // 「去看演唱會把票買了」的門票需求由活動搜尋任務承接（search_events），
+  // 單域下單由用戶在票務分支明說（「幫我買周杰倫演唱會的票」）
   const wantsTrainBuy =
     /[买買訂订]|下[单單]/.test(intent) && /車票|车票|高[铁鐵]票|火[车車]票/.test(intent);
   if (wantsTrainBuy) {
@@ -200,6 +347,30 @@ function tripPlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     });
   }
 
+  // 3. 活動域只讀展開（與天氣 / 交通並行；槽位泛詞命中即追加，不解析目錄）
+  if (TICKET_ACTIVITY_RE.test(slots.activity)) {
+    tasks.push({
+      skillId: 'skill.ticket.show',
+      action: 'search_events',
+      input: { city: slots.city },
+      inputBindings: {},
+      dependsOn: [],
+      timeLabel,
+      summary: `搜${slots.city}演出（${slots.activity}）`,
+    });
+  }
+  if (COFFEE_ACTIVITY_RE.test(slots.activity)) {
+    tasks.push({
+      skillId: 'skill.coffee.starbucks',
+      action: 'search_store',
+      input: { city: slots.city, limit: 5 },
+      inputBindings: {},
+      dependsOn: [],
+      timeLabel,
+      summary: `查${slots.city}星巴克門市`,
+    });
+  }
+
   return {
     intent,
     tasks,
@@ -214,6 +385,44 @@ function tripPlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
 }
 
 /**
+ * 本地規則式閒聊短路（雲端 LLM 不可用時的降級分類）
+ *
+ * 僅覆蓋「位置 / 定位授權類元問題」這一高頻且可靜態回答的形態
+ * （真實 badcase：「能不能獲取我的位置」被規劃器兜底文案答非所問）。
+ * 其餘閒聊形態本地無法可靠識別，一律返回 null 交回任務規劃鏈路
+ * （維持「寧可兜底、不誤吞任務」的保守語義，與分類器 Prompt 規則 3 對齊）。
+ *
+ * 排除條件：命中出行域任務詞（高鐵 / 機票 / 天氣等）的輸入即使含
+ * 「位置」也不是元問題（如「查我位置的天氣」）——任務分支優先。
+ */
+export function localChatReply(intent: string, ctx: AgentContext): string | null {
+  // 位置類元問題詞：間接提及位置 / 定位 / 「我在哪」
+  if (!/位置|定位|我在哪|哪個城市/.test(intent)) return null;
+  // 問句 / 授權語氣標記：無標記的（如「從我的位置出發」）是任務參數引用
+  if (!/[?？]|能不能|可不可以|可否|能否|是否|知道|獲取|获取|授權|授权|權限|权限/.test(intent)) {
+    return null;
+  }
+  // 任務域詞優先：含出行任務詞的複合句不是純元問題
+  if (/天氣|天气|氣溫|气温|高[铁鐵]|火[车車]|动[车車]|機票|机票|航班|飛機|飞机/.test(intent)) {
+    return null;
+  }
+
+  const { location, locationAuth } = ctx.userProfile;
+  if (locationAuth === 'granted' && location) {
+    return location.city
+      ? `可以，定位已授權，我目前知道你在${location.city}。位置只用於你明確要求的服務（如查天氣、規劃行程）。`
+      : '可以，定位已授權，座標已就緒（城市名暫未解析）。位置只用於你明確要求的服務（如查天氣、規劃行程）。';
+  }
+  if (locationAuth === 'denied') {
+    return '目前無法獲取：你尚未授權位置信息。可在小程序設置（右上角⋯ → 設置 → 位置信息）中開啟授權後再問我一次。';
+  }
+  if (locationAuth === 'error') {
+    return '目前獲取不到定位（非授權原因，可能是系統定位開關關閉或網路異常）。請稍後再試。';
+  }
+  return '本輪尚未嘗試獲取你的定位。你可以直接對我說「查天氣」或規劃行程，需要定位時我會向你請求。';
+}
+
+/**
  * 規則式規劃主入口
  *
  * @param intent 用戶自然語言意圖
@@ -224,9 +433,9 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   const tasks: NonNullable<PlannerLLMOutput['tasks']> = [];
 
   // 危機信號短路（安全優先於一切業務域，含支付短路）：自傷 / 輕生類
-  // 表達一律以本地靜態關懷文案回應（2026-10 技能收敛：陪伴對話 SKILL
-  // 已下架，安全網不隨之下架——不依賴任何 SKILL 與雲端可達性，離線
-  // 也能即刻回應；空 tasks + message 走 NEEDS_INPUT 收斂，狀態機零改動）
+  // 表達一律以本地靜態關懷文案回應（陪伴對話 SKILL 已於 2026-10 六域
+  // 回補重新上架，但安全網獨立於 SKILL 存在——不依賴任何 SKILL 與雲端
+  // 可達性，離線也能即刻回應；空 tasks + message 走 NEEDS_INPUT 收斂，狀態機零改動）
   if (isCrisisMessage(intent)) {
     return {
       intent,
@@ -240,15 +449,28 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     };
   }
 
-  // 支付意圖短路（2026-10 跳轉模式改版）：獨立短路分支必須優先於各業務域
-  // 判定——訂單指令攜帶「高鐵票訂單」等標題詞，若不短路會誤觸發 wantsTrain
-  // 等域規則產生錯誤下單任務。跳轉模式下真實支付發生在渠道側（12306 /
-  // OTA 收銀台），站內無代付能力（個人主體無法開通微信支付商戶號），
-  // 僅回覆引導文案。
-  if (/支付|付款/.test(intent)) {
+  // 支付意圖短路（2026-10 六域回補，聚合收銀台）：獨立短路分支必須優先於
+  // 各業務域判定——訂單指令攜帶「高鐵票訂單」等標題詞，若不短路會誤觸發
+  // wantsTrain 等域規則產生錯誤下單任務。跳轉模式下真實支付在渠道側
+  // （12306 / OTA / 星巴克 / 大麥 / 美團 / 京東收銀台），站內無代付能力
+  // （個人主體無法開通微信支付商戶號）——pay_orders 聚合全部
+  // pending_external 訂單逐單重建渠道跳轉包，由用戶逐單前往渠道完成支付
+  // （純讀無資金流，故無需確認彈窗）。「結帳 / 結算」不在此短路
+  // （歸購物域 checkout，渠道為京東），聚合入口詞為「支付 / 付款」。
+  if (/支付|付款|付[錢钱]|去付/.test(intent)) {
     return {
-      tasks: [],
-      message: '真實支付在官方渠道完成：請點擊購票卡上的「前往下單 / 複製資訊」按鈕，跳轉 12306 / OTA 小程序完成下單與支付。',
+      intent,
+      tasks: [
+        {
+          skillId: 'skill.payment.aicard',
+          action: 'pay_orders',
+          input: {},
+          inputBindings: {},
+          dependsOn: [],
+          summary: '聚合待支付訂單並引導渠道收銀台',
+        },
+      ],
+      message: '',
     };
   }
 
@@ -265,18 +487,79 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     return tripPlan(intent, ctx);
   }
 
+  // 實名補充輪錨點（與 isTripFollowup 同構）：上一輪 assistant 為「請補充
+  // 乘車人 / 觀演人」追問時，本輪純「姓名 + 證號」補充（無任何域詞）
+  // 仍屬訂票對話——從歷史最近含下單域詞的用戶意圖恢復規劃（補充信息
+  // 由 applyPassengerSlot 從對話歷史回填，佔位判定對真實值放行）。
+  // 缺失此錨點時補充輪會落「尚未支援此意圖」兜底，且規劃路由翻轉後
+  // message 短路會攔掉 LLM 恢復，多輪體驗斷裂（T4 實測）
+  if (
+    lastAssistant &&
+    /請補充(乘車人|觀演人)姓名/.test(lastAssistant.content) &&
+    /身份[證证]/.test(intent)
+  ) {
+    const origin = [...ctx.messages]
+      .reverse()
+      .find(
+        (m) =>
+          m.role === 'user' &&
+          /高[铁鐵]|动[车車]|火[车車]|機票|机票|航班|演唱[會会]|音[樂乐][節节]|音[樂乐][劇剧]|話[劇剧]|[門门]票|[購购]票|[買买]票|[搶抢]票/.test(
+            m.content,
+          ),
+      );
+    if (origin) return rulePlan(origin.content, ctx);
+  }
+
   const wantsTrain = /高[铁鐵]|动[车車]|火[车車]|[车車][次票]|12306/.test(intent);
   // 機票域：域詞命中（「飛」單字歧義大，僅收「飛往 / 坐飛 / 搭機」等組合詞）
   const wantsFlight = /機票|机票|航班|飛機|飞机|飛往|飞往|搭機|搭机|坐飛|坐飞/.test(intent);
-  // 買 / 訂 / 下單均視為下單意圖（觸發寫操作任務）
-  const wantsBuy = /[买買訂订]|下[单單]/.test(intent);
+  // 「咖啡(?!豆)」：買咖啡豆屬購物域，避免與商城 SKILL 雙觸發
+  const wantsCoffee = /星巴克|咖啡(?!豆)|拿[铁鐵]|美式|摩卡/.test(intent);
+  // 買 / 訂 / 下單 / 來一杯 / 幫我點 / 預約 均視為寫入意圖（觸發寫操作任務）。
+  // 「預約」必須在此收錄：預約域的 create_reservation 以買詞為觸發條件，
+  // 漏收會導致「預約明天羽毛球場地」只查時段不建預約卡（雙字組合收錄，
+  // 避免「大約 / 約會」單字誤觸）
+  const wantsBuy = /[买買訂订]|[預预][約约]|下[单單]|[来來][一]?[杯個份]|[帮幫]我[点點]/.test(intent);
+  // 購物域：域詞或商品詞命中（「咖啡豆」歸此域而非咖啡點單）
+  const wantsShopping =
+    /购物|購物|商城|商品|加[购購]|買東西|买东西/.test(intent) ||
+    PRODUCT_MAP.some(([re]) => re.test(intent));
+  // 結算意圖：購物車已有商品，直接結帳（不重搜不加購；「結帳 / 結算」
+  // 歸購物域而非支付聚合——聚合入口詞為「支付 / 付款」，見頭部短路）
+  const wantsCheckout = /結[帳账]|结账|結算|结算/.test(intent);
+  // 預約域：域詞或服務詞命中
+  const wantsBooking =
+    /預約|预约|預訂|预订/.test(intent) || SERVICE_MAP.some(([re]) => re.test(intent));
+  // 預約查詢意圖（「我的預約」）：只讀清單，不建預約
+  const wantsListReservations = /我的預約|我的预约|查.{0,4}預約|查.{0,4}预约/.test(intent);
+  // 票務域：演出域詞或目錄劇目 / 藝人詞命中（「車票 / 機票」歸出行域，
+  // 此處詞表不含，天然互斥；「買票」泛詞指向演出門票——車票需求必須
+  // 點名「車票 / 高鐵票 / 火車票」由 wantsTrain 承接）
+  // 商品語境排除：藝人 / 劇目詞命中但語義指向實體商品（專輯 / 唱片 /
+  // 周邊）且無演出語境詞時，不觸發票務域（「買周杰倫專輯」是購物而非
+  // 買演出票，誤觸會生成錯誤下單任務）；同句含演出詞（如「買專輯也
+  // 想看演唱會」）仍歸票務
+  const wantsMerchOnly = /[專专][輯辑]|唱片|周[邊边]|海[報报]/.test(intent) && !TICKET_ACTIVITY_RE.test(intent);
+  const wantsTicket =
+    /演唱[會会]|音[樂乐][節节]|話[劇剧]|音[樂乐][劇剧]|演出|看比[賽赛]|CBA|[門门]票|[購购]票|[買买]票|[搶抢]票/.test(intent) ||
+    (!wantsMerchOnly && TICKET_KEYWORD_MAP.some(([re]) => re.test(intent)));
+  // 諮詢域（兜底對話）：情緒 / 陪聊詞——僅在無任何任務域命中時展開
+  // （「煩死了幫我訂杯咖啡」應訂咖啡而非陪聊，見末尾 tasks.length === 0 分支）
+  const wantsCounseling =
+    /心情|難過|难过|傷心|伤心|焦慮|焦虑|壓[力大]|压[力大]|孤單|孤单|寂寞|[鬱郁][悶闷]|煩|烦|陪我|聊[一]?聊|說說話|说说话|傾訴|倾诉|開心不起來|开心不起来/.test(intent);
   // 天氣域：只讀查詢；座標由 ctx.userProfile.location 提供（context 構建時
   // wx.getLocation 取得，見 core/context.ts fetchLocation）
   const wantsWeather = /天氣|天气|氣溫|气温|溫度|温度|幾度|几度|下雨/.test(intent);
 
+  // 出發城市（單域分支共用）：用戶點名 > 地址簿默認地址 > 定位；
+  // 均無時追問（舊「缺省北京」演示 hack 已廢除——會訂錯出發地）
+  const cities = extractCities(intent);
+  const from = cities[0] ?? departureCity(ctx);
+  if ((wantsTrain || wantsFlight) && !from) {
+    return { tasks: [], message: DEPARTURE_CITY_PROMPT };
+  }
+
   if (wantsTrain) {
-    const cities = extractCities(intent);
-    const from = cities[0] ?? '北京';
     const to = cities[1] ?? '上海';
     const date = extractDate(intent);
     const seatType = extractSeatType(intent);
@@ -324,8 +607,6 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   }
 
   if (wantsFlight) {
-    const cities = extractCities(intent);
-    const from = cities[0] ?? '北京';
     const to = cities[1] ?? '上海';
     const date = extractDate(intent);
     const cabin = extractCabin(intent);
@@ -372,8 +653,182 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     }
   }
 
+  // 咖啡域：門市查詢 →（買詞時）點單需求卡跳轉星巴克。城市取定位 /
+  // 地址簿（無城市概念的用户說「來杯咖啡」也成立，門市查詢以當前城市
+  // 兜底；無定位時缺省上海——門市查詢為只讀演示，不產生真實扣款）
+  if (wantsCoffee) {
+    const city = ctx.userProfile.location?.city ?? '上海';
+    const searchTaskId = `task_${padTaskNo(tasks.length + 1)}`;
+    tasks.push({
+      skillId: 'skill.coffee.starbucks',
+      action: 'search_store',
+      input: { city, limit: 5 },
+      inputBindings: {},
+      dependsOn: [],
+      summary: `查詢${city}附近的星巴克門市`,
+    });
+
+    if (wantsBuy) {
+      const drink = extractDrink(intent);
+      tasks.push({
+        skillId: 'skill.coffee.starbucks',
+        action: 'place_order',
+        input: {
+          items: [{ sku: `demo_${drink}`, name: drink, quantity: 1, size: '中杯' }],
+          pickupType: 'in_store',
+        },
+        inputBindings: {
+          storeId: { fromTaskId: searchTaskId, fromField: 'data.stores.0.storeId' },
+        },
+        dependsOn: [searchTaskId],
+        summary: `下單一杯${drink}（需確認，跳轉星巴克完成）`,
+      });
+    }
+  }
+
+  // 購物域：搜尋 →（點名商品且買詞時）加購；「結帳 / 結算」直接 checkout
+  if (wantsShopping && !wantsCheckout) {
+    const product = extractProduct(intent);
+    const searchTaskId = `task_${padTaskNo(tasks.length + 1)}`;
+    tasks.push({
+      skillId: 'skill.shopping.mall',
+      action: 'search_products',
+      input: product ? { keyword: product.name } : {},
+      inputBindings: {},
+      dependsOn: [],
+      summary: product ? `查詢「${product.name}」商品` : '濟覽商城商品',
+    });
+
+    // 購買意圖且點名商品 → 加購（字面 productId，與「字面值優先」規則對齊）
+    if (wantsBuy && product) {
+      tasks.push({
+        skillId: 'skill.shopping.mall',
+        action: 'add_to_cart',
+        input: { productId: product.productId, quantity: 1, name: product.name },
+        inputBindings: {
+          // 即時價注入：確認彈窗得以在加購前展示真實價格（與車票同構）
+          priceCent: { fromTaskId: searchTaskId, fromField: `data.priceCentByProduct.${product.productId}` },
+        },
+        dependsOn: [searchTaskId],
+        summary: `把${product.name}加入購物車（需確認）`,
+      });
+    }
+  }
+
+  // 結算：單任務（購物車狀態由雲端 / mock 會話持有，無需先查詢）。
+  // 「結帳 / 結算」單獨說出即觸發（加購後下一輪「結帳」是最自然指令，
+  // 不要求同句再帶購物域詞——上方 wantsShopping && !wantsCheckout 已保證
+  // 結算時不重搜不加購）
+  if (wantsCheckout) {
+    tasks.push({
+      skillId: 'skill.shopping.mall',
+      action: 'checkout',
+      input: {},
+      inputBindings: {},
+      dependsOn: [],
+      summary: '結算購物車並跳轉京東下單（需確認）',
+    });
+  }
+
+  // 預約域：查清單 / 搜服務 →（點名服務時）建預約需求卡跳轉美團
+  if (wantsBooking) {
+    // 查我的預約：只讀單任務
+    if (wantsListReservations) {
+      tasks.push({
+        skillId: 'skill.booking.center',
+        action: 'list_reservations',
+        input: {},
+        inputBindings: {},
+        dependsOn: [],
+        summary: '查詢我的全部預約',
+      });
+    } else {
+      const service = extractService(intent);
+      const date = extractDate(intent);
+      const searchTaskId = `task_${padTaskNo(tasks.length + 1)}`;
+      tasks.push({
+        skillId: 'skill.booking.center',
+        action: 'search_services',
+        input: { date, ...(service ? { keyword: service.name } : {}) },
+        inputBindings: {},
+        dependsOn: [],
+        summary: service ? `查詢 ${date}「${service.name}」可約時段` : `查詢 ${date} 可預約服務`,
+      });
+
+      // 預約即寫意圖且點名服務 → 建預約。用戶點名時間寫字面值；
+      // 未點名則以 binding 取「首個可約時段」（規避字面時間撞滿約失敗）
+      if (wantsBuy && service) {
+        const startTime = extractStartTime(intent);
+        tasks.push({
+          skillId: 'skill.booking.center',
+          action: 'create_reservation',
+          input: { serviceId: service.serviceId, date, ...(startTime ? { startTime } : {}) },
+          inputBindings: startTime
+            ? {
+                // 服務費注入：確認彈窗在預約前展示真實金額（與車票同構）
+                priceCent: { fromTaskId: searchTaskId, fromField: `data.priceCentByService.${service.serviceId}` },
+              }
+            : {
+                startTime: { fromTaskId: searchTaskId, fromField: `data.firstAvailableStartTimeByService.${service.serviceId}` },
+                priceCent: { fromTaskId: searchTaskId, fromField: `data.priceCentByService.${service.serviceId}` },
+              },
+          dependsOn: [searchTaskId],
+          summary: `預約${service.name} ${date}${startTime ? ' ' + startTime : '（首個可約時段）'}（需確認，跳轉美團完成）`,
+        });
+      }
+    }
+  }
+
+  // 票務域：搜演出 → 查場次 →（買詞時）購票需求卡跳轉大麥（三級鏈依賴）
+  if (wantsTicket) {
+    const keyword = extractTicketKeyword(intent);
+    const searchTaskId = `task_${padTaskNo(tasks.length + 1)}`;
+    tasks.push({
+      skillId: 'skill.ticket.show',
+      action: 'search_events',
+      input: keyword ? { keyword } : {},
+      inputBindings: {},
+      dependsOn: [],
+      summary: keyword ? `搜尋「${keyword}」演出` : '搜尋演出',
+    });
+
+    // 場次與票檔查詢（依賴搜尋結果；綁定首個命中演出）
+    const sessionTaskId = `task_${padTaskNo(tasks.length + 1)}`;
+    tasks.push({
+      skillId: 'skill.ticket.show',
+      action: 'list_sessions',
+      input: {},
+      inputBindings: { eventId: { fromTaskId: searchTaskId, fromField: 'data.firstEventId' } },
+      dependsOn: [searchTaskId],
+      summary: '查詢場次與票檔',
+    });
+
+    // 買詞 → 購票需求卡（實名觀演人為演示資料；確認彈窗完整展示，
+    // applyPassengerSlot 後處理同樣適用——對話明說 > 乘車人簿默認人）
+    if (wantsBuy) {
+      tasks.push({
+        skillId: 'skill.ticket.show',
+        action: 'create_order',
+        input: {
+          quantity: 1,
+          viewerName: '演示觀演人',
+          viewerIdNo: '110101199001011234',
+        },
+        inputBindings: {
+          eventId: { fromTaskId: searchTaskId, fromField: 'data.firstEventId' },
+          sessionId: { fromTaskId: sessionTaskId, fromField: 'data.firstAvailableSessionId' },
+          tierId: { fromTaskId: sessionTaskId, fromField: 'data.firstAvailableTierId' },
+          priceCent: { fromTaskId: sessionTaskId, fromField: 'data.firstAvailablePriceCent' },
+        },
+        dependsOn: [sessionTaskId],
+        summary: '生成購票卡跳轉大麥下單（需確認）',
+      });
+    }
+  }
+
   // 天氣查詢：只讀單任務；座標寫字面值（城市僅用於展示標籤）。
-  // 座標缺失時不生成任務——定位未授權 / 失敗時由末尾分支統一追問定位授權
+  // 座標缺失時不生成任務——按授權狀態分別引導（拒絕授權 → 開授權；
+  // 其餘失敗 → 稍後重試），見末尾分支
   const weatherLoc = ctx.userProfile.location;
   if (wantsWeather && weatherLoc?.lat !== undefined && weatherLoc?.lng !== undefined) {
     tasks.push({
@@ -387,19 +842,55 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   }
 
   if (tasks.length === 0) {
-    // 天氣意圖但無定位：優先追問定位授權（座標為 get_weather 必填入參）
+    // 天氣意圖但無定位：按授權狀態精確引導（座標為 get_weather 必填入參）
     if (wantsWeather) {
+      if (ctx.userProfile.locationAuth === 'denied') {
+        return {
+          tasks: [],
+          message: '查詢天氣需要定位，而你尚未授權位置信息：請在小程序設置（右上角⋯ → 設置 → 位置信息）開啟授權後再試。',
+        };
+      }
       return {
         tasks: [],
         message: '查詢天氣需要定位：請確認已允許小程序使用你的位置，然後再試。',
       };
     }
-    return {
-      tasks: [],
-      message:
-        '尚未支援此意圖。目前可辦：高鐵車次查詢與跳轉 12306 購票、國內航班查詢與跳轉 OTA 購票、' +
-        '實時天氣查詢，以及一句話出行行程規劃（車次 + 天氣 + 行程時間線）。',
-    };
+    // 諮詢域兕底：純情緒 / 陪聊表達（無任何任務域詞命中才到這裡——
+    // 混合語句已被上方任務分支接管）→ 陪伴對話任務（雲端 LLM 真實
+    // 對話，多輪歷史由 SKILL 從 ctx.messages 抽取；危機詞已在頭部短路）
+    if (wantsCounseling) {
+      return {
+        intent,
+        tasks: [
+          {
+            skillId: 'skill.mind.counseling',
+            action: 'chat_companion',
+            input: { message: intent },
+            inputBindings: {},
+            dependsOn: [],
+            summary: '陪伴對話',
+          },
+        ],
+        message: '',
+      };
+    }
+    // 詞表外兜底（2026-10 修訂）：不再返回「尚未支援」文案——規劃路由
+    // 翻轉後 client.plan 以「tasks 或 message 非空」短路，非空 message 會
+    // 把詞表外意圖也攔在規則層，LLM 兜底路徑淪為 100% 不可達死代碼
+    // （審計 H1：文案聲稱可辦演出票務卻拒絕了「查音樂劇」類詞表外表述）。
+    // 規則不認識的意圖以空 tasks + 空 message 誠實透傳交 LLM 規劃；LLM
+    // 不可用的開發環境降級由 client.ts 補 UNSUPPORTED_HINT 功能清單
+    return { tasks: [], message: '' };
   }
   return { intent, tasks, message: '' };
 }
+
+/**
+ * 開發環境 LLM 不可用且規則詞表亦未覆蓋時的功能清單引導文案。
+ * 隨路由翻轉從本檔兜底分支遷出（詞表外意圖交 LLM 規劃，此文案僅在
+ * client.ts 的 DEV 降級路徑出現，release 語義不變）。
+ */
+export const UNSUPPORTED_HINT =
+  '尚未支援此意圖。目前可辦：高鐵車次查詢與跳轉 12306 購票、國內航班查詢與跳轉 OTA 購票、' +
+  '實時天氣查詢、星巴克門市查詢與點單、商品搜尋與加購結算、生活服務預約、' +
+  '演出票務搜尋與購票、情感陪伴對話、待支付訂單聚合引導，以及一句話出行行程規劃。';

@@ -225,16 +225,31 @@ export function findFirstMissingBookingPassenger(plan: Plan): MissingPassengerIn
     const f = BOOKING_FIELDS.find((x) => x.skillId === t.skillId && x.action === t.action);
     if (!f) continue;
     const bound = t.inputBindings ?? {};
+    // 演示佔位視同缺失（2026-10 規劃路由翻轉後的實測回歸點：規則式
+    // 路徑的 book_ticket 預填「演示乘客」，applyPassengerSlot 回填失敗
+    // （對話與乘車人簿均無真實人）時若不攔，會直接以演示名義出票，
+    // 繞過 LLM 路徑 prompt 規則 9 的實名追問義務）
+    const nameVal = str(t.input[f.nameField]);
+    const idVal = str(t.input[f.idField]);
     const missing: string[] = [];
-    if (!(f.nameField in bound) && str(t.input[f.nameField]) === '') missing.push('姓名');
-    if (!(f.idField in bound) && str(t.input[f.idField]) === '') missing.push('證件號');
+    // 佔位成對判斷：演示數據總是姓名 + 證號成對預填；姓名已為真實值
+    // 而證號恰等於演示常量時（用戶沿用了 prompt 範例證號的極端場景），
+    // 視為用戶明說放行，避免追問死循環
+    if (!(f.nameField in bound) && (nameVal === '' || DEMO_NAMES.has(nameVal))) missing.push('姓名');
+    if (
+      !(f.idField in bound) &&
+      (idVal === '' || (idVal === DEMO_ID_NO && DEMO_NAMES.has(nameVal)))
+    )
+      missing.push('證件號');
     if (missing.length > 0) return { taskId: t.id, roleLabel: f.roleLabel, missingFields: missing };
   }
   return null;
 }
 
 /**
- * 需實名乘車人的下單任務 → 姓名 / 證號欄位映射（skillId + action 精準匹配）
+ * 需實名信息的下單任務 → 姓名 / 證號欄位映射（skillId + action 精準匹配）。
+ * 2026-10 六域回補：票務 create_order 的觀演人與乘車人同構（實名 +
+ * 跳轉渠道下單），納入同一回填 / 追問鏈路
  */
 const BOOKING_FIELDS: Array<{
   skillId: string;
@@ -246,10 +261,11 @@ const BOOKING_FIELDS: Array<{
 }> = [
   { skillId: 'skill.train.12306', action: 'book_ticket', nameField: 'passengerName', idField: 'passengerIdNo', roleLabel: '乘車人' },
   { skillId: 'skill.flight.variflight', action: 'book_flight', nameField: 'passengerName', idField: 'passengerIdNo', roleLabel: '乘車人' },
+  { skillId: 'skill.ticket.show', action: 'create_order', nameField: 'viewerName', idField: 'viewerIdNo', roleLabel: '觀演人' },
 ];
 
-/** rule-planner 演示佔位姓名集（真實乘車人信息應覆蓋之） */
-const DEMO_NAMES = new Set(['演示乘客']);
+/** rule-planner 演示佔位姓名集（真實乘車人 / 觀演人信息應覆蓋之） */
+const DEMO_NAMES = new Set(['演示乘客', '演示觀演人']);
 
 /** rule-planner 演示佔位證號（與 rule-planner.ts 兩處演示數據逐字對齊） */
 const DEMO_ID_NO = '110101199001011234';

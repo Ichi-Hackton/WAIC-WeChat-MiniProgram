@@ -69,6 +69,8 @@ export interface BookFlightInput {
 export interface BookFlightOutput {
   orderId: string;
   flightNo: string;
+  /** 乘機人姓名（供購票卡主卡面二次核對；證件號不透出） */
+  passengerName?: string;
   amountCent: number;
   status: 'pending_external' | 'completed' | 'cancelled';
   /** 跳轉包（appId 為空串 = copy-only，僅複製購票資訊） */
@@ -296,6 +298,7 @@ async function invokeBook(
       data: {
         orderId: `mock_flg_${Date.now()}`,
         flightNo: input.flightNo,
+        passengerName: input.passengerName,
         amountCent,
         status: 'pending_external',
         jump: {

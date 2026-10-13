@@ -27,6 +27,8 @@ export class LLMParserError extends Error {
 export interface PlannerLLMOutput {
   intent?: string;
   tasks?: Array<{
+    /** 任務 id（可選，LLM 自編號如 task_001；toPlan 重編號時做引用遷移） */
+    id?: string;
     skillId?: string;
     action?: string;
     input?: Record<string, unknown>;
@@ -44,6 +46,10 @@ export interface PlannerLLMOutput {
     activity?: string;
   };
   message?: string;
+  /** 隱式偏好沉澱增量（可選增強欄位，prompt 規則 12）：本輪對話中用戶
+   *   顯式表達的長期偏好，鍵限 storage/preferences 白名單域。不進 Plan
+   *   （記憶副作用而非任務數據），由 client 規劃後處理寫回 */
+  memory?: Record<string, string>;
 }
 
 /** 抽取 JSON 對象（含陣列或對象） */
@@ -125,12 +131,34 @@ export function validatePlannerOutput(raw: unknown): PlannerLLMOutput {
     }
     assertNoPlaceholder(o.tasks[i], i);
   }
+  // memory 為可選增強欄位：寬容處理——非純物件形態直接剔除，不因記憶
+  // 欄位畸形否決整個 Plan（白名單鍵過濾與值脫敏在寫回側 updatePreferences，
+  // 與分類器「增強而非單點」的容錯哲學同構）
+  if (
+    o.memory !== undefined &&
+    (typeof o.memory !== 'object' || o.memory === null || Array.isArray(o.memory))
+  ) {
+    delete o.memory;
+  }
   return o as PlannerLLMOutput;
 }
 
 /** 將 LLM 輸出轉為標準 Plan（含 Task 補齊欄位） */
 export function toPlan(llm: PlannerLLMOutput, intent: string, planId: string): Plan {
-  const tasks: Task[] = (llm.tasks ?? []).map((t, idx) => ({
+  const raw = llm.tasks ?? [];
+  // 任務 id 重編號 + 引用遷移：LLM 可能自編任務 id（如 task_e01）並在
+  // inputBindings.fromTaskId / dependsOn 中引用；重編號為 task_NNN 後若
+  // 不同步遷移引用側，綁定將懸空（實測 BINDING_FAILED：路徑
+  // task_e01.xxx 取不到值）。rule-planner 不寫 id 且直接引用 task_NNN
+  // 最終編號——映射表為空時引用原樣透傳，兩種來源相容
+  const idMap = new Map<string, string>();
+  raw.forEach((t, idx) => {
+    if (typeof t.id === 'string' && t.id) {
+      idMap.set(t.id, `task_${String(idx + 1).padStart(3, '0')}`);
+    }
+  });
+  const remap = (ref: string): string => idMap.get(ref) ?? ref;
+  const tasks: Task[] = raw.map((t, idx) => ({
     id: `task_${String(idx + 1).padStart(3, '0')}`,
     skillId: t.skillId ?? '',
     action: t.action ?? '',
@@ -138,10 +166,10 @@ export function toPlan(llm: PlannerLLMOutput, intent: string, planId: string): P
     inputBindings: Object.fromEntries(
       Object.entries(t.inputBindings ?? {}).map(([k, v]) => [
         k,
-        { fromTaskId: v.fromTaskId ?? '', fromField: v.fromField ?? '' },
+        { fromTaskId: remap(v.fromTaskId ?? ''), fromField: v.fromField ?? '' },
       ]),
     ),
-    dependsOn: (t.dependsOn ?? []).filter((s): s is string => typeof s === 'string'),
+    dependsOn: (t.dependsOn ?? []).filter((s): s is string => typeof s === 'string').map(remap),
     status: 'pending',
     retryCount: 0,
     summary: t.summary ?? `${t.skillId}.${t.action}`,
@@ -178,6 +206,59 @@ export function parsePlannerOutput(rawText: string, intent: string, planId: stri
   const json = extractJson(rawText);
   const validated = validatePlannerOutput(json);
   return toPlan(validated, intent, planId);
+}
+
+/**
+ * 跨任務綁定 fromField 合法首段白名單（防 LLM 欄位路徑幻覺——實測
+ * 自編 firstServiceId 之類幻覺路徑會穿透到 Scheduler 運行時
+ * BINDING_FAILED 回滾）。形態兩類：
+ *   - data.*：標準容器路徑（六域 SKILL 輸出規範，如
+ *     data.stores.0.storeId / data.priceCentByService.svc_001）
+ *   - 頂層便利欄位：出行域早期約定（search_train / search_flight
+ *     響應頂層的 trainNo / date / priceCent / flightNo 與
+ *     priceCentByTrain.* / priceCentByFlight.* 即時價映射）
+ * 新增 SKILL 若引入新的頂層綁定欄位，需同步本白名單（rule-planner
+ * 全部 fromField 均在此集合內，與 validatePlanBindings 共同維護）
+ */
+const BINDING_FIELD_ROOTS = new Set([
+  'data',
+  'trainNo',
+  'date',
+  'priceCent',
+  'flightNo',
+  'priceCentByTrain',
+  'priceCentByFlight',
+]);
+
+/**
+ * 校驗 Plan 內任務引用一致性：inputBindings.fromTaskId 與 dependsOn
+ * 必須指向 Plan 內存在的其他任務（自引用取不到值 / 死鎖，同樣無效）；
+ * fromField 首段必須命中 BINDING_FIELD_ROOTS 白名單（欄位路徑幻覺與
+ * 引用幻覺同屬 LLM 規劃缺陷）。
+ * 返回錯誤描述列表（空陣列 = 通過）；由呼叫方（client.plan）決定是否
+ * 降級規則規劃器兜底
+ */
+export function validatePlanBindings(p: Plan): string[] {
+  const ids = new Set(p.tasks.map((t) => t.id));
+  const errs: string[] = [];
+  for (const t of p.tasks) {
+    for (const [k, b] of Object.entries(t.inputBindings ?? {})) {
+      if (!b.fromTaskId || !ids.has(b.fromTaskId) || b.fromTaskId === t.id) {
+        errs.push(`task ${t.id} 的綁定 ${k} 引用無效任務「${b.fromTaskId}」`);
+        continue;
+      }
+      const root = (b.fromField ?? '').split('.')[0] ?? '';
+      if (!root || !BINDING_FIELD_ROOTS.has(root)) {
+        errs.push(`task ${t.id} 的綁定 ${k} 引用未知欄位路徑「${b.fromField}」`);
+      }
+    }
+    for (const d of t.dependsOn) {
+      if (!ids.has(d) || d === t.id) {
+        errs.push(`task ${t.id} 依賴無效任務「${d}」`);
+      }
+    }
+  }
+  return errs;
 }
 
 /** 對外暴露的版本資訊（供測試用） */

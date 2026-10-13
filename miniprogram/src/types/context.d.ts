@@ -14,14 +14,26 @@ export interface UserLocation {
   lat?: number;
   /** 經度（gcj02）；同上可能缺失 */
   lng?: number;
-  /** 城市名（如「深圳市」）；優先取地址簿默認地址市級，未填寫時由雲端 /api/geo/reverse 補全，解析失敗時缺失 */
+  /** 城市名（如「深圳」；已歸一化去行政區後綴）——優先取地址簿默認地址市級，
+   *  未填寫時由雲端 /api/geo/reverse 補全，兩者均無時缺失 */
   city?: string;
+  /** 城市來源（出發城市優先級的能見度：地址簿 > 定位） */
+  citySource?: 'address_book' | 'geocode' | 'native';
 }
+
+/** 定位授權狀態（context 構建時由 fetchLocation 寫入；區分「拒絕授權」與「定位失敗」） */
+export type LocationAuth =
+  | 'granted'    // 已授權且取到座標
+  | 'denied'     // 用戶拒絕授權（errMsg 含 auth deny / denied / permission）
+  | 'error';     // 非授權原因失敗（系統定位開關關閉 / 網路異常等）
 
 /** 用戶畫像 */
 export interface UserProfile {
   location?: UserLocation;
-  /** 用戶偏好（如飲食、座位類型） */
+  /** 定位授權狀態；缺失表示本輪未嘗試定位（withLocation=false 或無 wx 環境） */
+  locationAuth?: LocationAuth;
+  /** 用戶偏好（長期記憶：storage/preferences 白名單域，如飲食、座位類型；
+   *   隱式對話沉澱 + 顯式手動設置雙軌寫入，本地落盤待雲端同步） */
   preferences: Record<string, unknown>;
   /** 歷史意圖（脫敏後，僅保留語意摘要） */
   history: Array<{ intent: string; timestamp: number }>;

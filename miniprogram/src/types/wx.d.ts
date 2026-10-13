@@ -144,6 +144,20 @@ declare const wx: {
     fail?: (err: unknown) => void;
   }): void;
 
+  // 微信收貨地址選擇器（requiredPrivateInfos 需含 "chooseAddress"；
+  // 封裝於 services/address.ts，業務層勿直接呼叫）
+  chooseAddress(opts: {
+    success?: (res: {
+      userName?: string;
+      telNumber?: string;
+      provinceName?: string;
+      cityName?: string;
+      countyName?: string;
+      detailInfo?: string;
+    }) => void;
+    fail?: (err: unknown) => void;
+  }): void;
+
   // 雲開發
   cloud: {
     init(opts: { env: string; traceUser?: boolean }): void;

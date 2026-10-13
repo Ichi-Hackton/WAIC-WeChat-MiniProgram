@@ -44,7 +44,12 @@ export function applyBindings(
     // 無前綴路徑：bindings 逐鍵優先，缺鍵回退 data 同名路徑；帶 data. 前綴僅查 data
     let value = viaData ? undefined : getByPath(src.result.bindings, path);
     if (value === undefined) value = getByPath(src.result.data, path);
-    if (value === undefined) {
+    // null 與 undefined 同為「取不到值」：ticket / booking 域 first* 便捷欄位
+    // 以 null 表「無可約 / 未覆蓋」（如 list_sessions 全售罄的
+    // firstAvailableSessionId），若穿透注入會先彈含 null 入參的寫操作
+    // 確認框、用戶確認後才在雲端校驗失敗——於綁定層攔截提前短路
+    // （BINDING_FAILED 級聯跳過，不浪費一輪人工確認）
+    if (value === undefined || value === null) {
       throw new Error(
         `inputBindings 解析失敗：路徑 ${ref.fromTaskId}.${ref.fromField} 取不到值`,
       );
