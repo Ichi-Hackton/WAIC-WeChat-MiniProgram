@@ -18,21 +18,25 @@
  *   配置後由 createRestTicketProvider 按「票務渠道接入 REST 契約」真實
  *   調用（Bearer 鑒權 / 超時 / 錯誤分流，參考實作見 scripts/ticket-partner-mock.mjs）；
  *   演示目錄 Provider 恆在末位兜底，未配置渠道時演示鏈路仍可用。
- *   下單 / 取消為模擬閉環（同 skill-train 模式：渠道下單 API 開通後僅
- *   替換 Provider 內部實作，端點協議不變）。
+ *   下單 / 取消為跳轉閉環（2026-10 六域回補：大麥 / 秀動無公開 API，
+ *   個人主體拿不到渠道網關時，create_order 生成 pending_external
+ *   跳轉單 + 大麥小程序跳轉包，真實購票與支付在大麥側完成；渠道
+ *   網關開通後僅替換 Provider 內部實作，端點協議不變）。
  *
  * 庫存模型：確定性偽隨機基礎庫存（djb2 雜湊 seed = 場次+票檔；最低
  * 價檔 t1 保底有票，保證演示鏈路永遠可下單）− 記憶體已售量；同一入
  * 參恆得同一結果，離線演示與自動化驗證均可復現（渠道 Provider 的
  * 庫存以渠道即時回傳為準）。
  *
- * 訂單存於記憶體 Map（重啟丟失、多實例不共享，正式版應落庫），以
- * x-wx-openid 歸屬鑒權（規範 § 10）：寫操作缺身份 401、越權操作
- * 他人訂單 403（防 IDOR）。
+ * 訂單落庫 MySQL（db.ts domain=ticket，重啟不丟），以 x-wx-openid
+ * 歸屬鑒權（規範 § 10）：寫操作缺身份 401、越權操作他人訂單 403
+ * （防 IDOR）。
  */
 
 import type { RouteHandler } from './api';
 import { ok, fail, badRequest, unauthorized, forbidden } from './api';
+import { createOrder, getOrder, cancelOrder, listOrders } from './db';
+import { buildJump } from './external-jump';
 import type { EventSummary, SessionInfo, TierInfo, SessionBundle, TicketProvider } from './ticket-provider';
 import { TicketProviderError, createRestTicketProvider } from './ticket-provider';
 
@@ -343,26 +347,8 @@ function resolveProviders(): TicketProvider[] {
 }
 
 // ---------------------------------------------------------------------------
-// 訂單簿（記憶體 Map：重啟丟失、多實例不共享，見檔頭說明）
+// 訂單簿：db.ts 落庫（domain=ticket；payload 承載下單欄位，取消恢復庫存用）
 // ---------------------------------------------------------------------------
-
-interface TicketOrder {
-  orderId: string;
-  eventId: string;
-  eventName: string;
-  sessionId: string;
-  sessionDate: string;
-  startTime: string;
-  tierId: string;
-  tierName: string;
-  quantity: number;
-  amountCent: number;
-  status: 'pending_payment' | 'paid';
-  owner: string;
-  createdAt: number;
-}
-
-const orders = new Map<string, TicketOrder>();
 
 /** 跨 Provider 定位場次與票檔（eventId → session → tier 三級查找）
  *
@@ -558,19 +544,35 @@ const handleCreateOrder: RouteHandler = async (body, ctx) => {
   const orderId = `tkt_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
   const keys = tierKeys(located.tier.tierId);
   soldByTier.set(`${keys.sessionId}_${keys.tierNo}`, (soldByTier.get(`${keys.sessionId}_${keys.tierNo}`) ?? 0) + quantity);
-  orders.set(orderId, {
+
+  /*
+   * 跳轉模式：訂單語義為「購票需求卡」（pending_external），真實購票
+   * 與支付在大麥小程序側完成；庫存核實仍在本側做（下單前的最後一道
+   * 演示性把關，渠道網關接入後以渠道即時庫存為準）。
+   */
+  const copyText = [
+    `演出 ${located.bundle.event.name}`,
+    `${located.session.date} ${located.session.startTime} 場`,
+    `${located.tier.name} ×${quantity}（參考價 ¥${(amountCent / 100).toFixed(2)}）`,
+    `場館 ${located.bundle.event.venue}`,
+    '以下單頁實際價格與票檔為準',
+  ].join('\n');
+  await createOrder({
     orderId,
-    eventId: located.bundle.event.eventId,
-    eventName: located.bundle.event.name,
-    sessionId: located.session.sessionId,
-    sessionDate: located.session.date,
-    startTime: located.session.startTime,
-    tierId: located.tier.tierId,
-    tierName: located.tier.name,
-    quantity,
-    amountCent,
-    status: 'pending_payment',
     owner: ctx.openid,
+    domain: 'ticket',
+    status: 'pending_external',
+    payload: {
+      eventId: located.bundle.event.eventId,
+      eventName: located.bundle.event.name,
+      sessionId: located.session.sessionId,
+      sessionDate: located.session.date,
+      startTime: located.session.startTime,
+      tierId: located.tier.tierId,
+      tierName: located.tier.name,
+      quantity,
+      amountCent,
+    },
     createdAt: Date.now(),
   });
 
@@ -585,8 +587,8 @@ const handleCreateOrder: RouteHandler = async (body, ctx) => {
     tierName: located.tier.name,
     quantity,
     amountCent,
-    status: 'pending_payment',
-    payDeadline: Date.now() + 15 * 60 * 1000,
+    status: 'pending_external',
+    jump: buildJump('damai', copyText),
   });
 };
 
@@ -603,22 +605,25 @@ const handleCancel: RouteHandler = async (body, ctx) => {
   if (!ctx.openid) {
     return unauthorized('缺少調用方身份（x-wx-openid），拒絕取消');
   }
-  const order = orders.get(input.orderId);
-  if (!order) {
+  const order = await getOrder(input.orderId);
+  if (!order || order.domain !== 'ticket') {
     // 業務失敗（HTTP 200 + 非 0 code），SKILL rollback 會翻譯為異常
     return fail(404, `訂單不存在或已取消：${input.orderId}`);
   }
-  // 歸屬鑒權：僅訂單擁有者可取消（防 IDOR——枚舉 orderId 越權取消他人訂單）
-  if (order.owner !== ctx.openid) {
+
+  // 歸屬鑒權 + 取消（防 IDOR——枚舉 orderId 越權取消他人訂單）
+  const result = await cancelOrder(input.orderId, ctx.openid);
+  if (result === 'forbidden') {
     return forbidden('無權取消他人訂單');
   }
 
-  // 恢復庫存並移除訂單（MVP 模擬閉環：已支付訂單亦直接取消；正式版
-  // 應按 status 區分——paid 須走退款流程而非直接刪單）
-  const keys = tierKeys(order.tierId);
-  const soldKey = `${keys.sessionId}_${keys.tierNo}`;
-  soldByTier.set(soldKey, Math.max(0, (soldByTier.get(soldKey) ?? 0) - order.quantity));
-  orders.delete(input.orderId);
+  // 恢復演示庫存（tierId 從 payload 取；渠道網關接入後以渠道側為準）
+  const p = order.payload as { tierId?: string; quantity?: number };
+  if (p.tierId && typeof p.quantity === 'number') {
+    const keys = tierKeys(p.tierId);
+    const soldKey = `${keys.sessionId}_${keys.tierNo}`;
+    soldByTier.set(soldKey, Math.max(0, (soldByTier.get(soldKey) ?? 0) - p.quantity));
+  }
   return ok({ ok: true, orderId: input.orderId });
 };
 
@@ -626,23 +631,26 @@ const handleListOrders: RouteHandler = async (_body, ctx) => {
   if (!ctx.openid) {
     return unauthorized('缺少調用方身份（x-wx-openid），拒絕查詢');
   }
-  const list = Array.from(orders.values())
-    .filter((o) => o.owner === ctx.openid)
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .map((o) => ({
+  const rows = await listOrders(ctx.openid, 'ticket');
+  const list = rows.map((o) => {
+    const p = o.payload as {
+      eventId?: string; eventName?: string; sessionId?: string; sessionDate?: string;
+      startTime?: string; tierId?: string; tierName?: string; quantity?: number; amountCent?: number;
+    };
+    return {
       orderId: o.orderId,
-      eventId: o.eventId,
-      eventName: o.eventName,
-      sessionId: o.sessionId,
-      sessionDate: o.sessionDate,
-      startTime: o.startTime,
-      tierId: o.tierId,
-      tierName: o.tierName,
-      quantity: o.quantity,
-      amountCent: o.amountCent,
+      eventId: p.eventId ?? '',
+      eventName: p.eventName ?? '',
+      sessionId: p.sessionId ?? '',
+      sessionDate: p.sessionDate ?? '',
+      startTime: p.startTime ?? '',
+      tierId: p.tierId ?? '',
+      tierName: p.tierName ?? '',
+      quantity: p.quantity ?? 1,
+      amountCent: p.amountCent ?? 0,
       status: o.status,
-      payDeadline: o.createdAt + 15 * 60 * 1000,
-    }));
+    };
+  });
   return ok({ orders: list });
 };
 

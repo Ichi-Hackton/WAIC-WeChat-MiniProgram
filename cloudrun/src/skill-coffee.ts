@@ -14,11 +14,17 @@
  *      詳見 callStarbucksOpenApi 註釋）
  *   2. 確定性模擬數據：憑證未配置 / 調用失敗時降級，保證離線演示可用
  *
- * 訂單存於記憶體 Map（重啟丟失、實例間不共享，正式版應落庫）。
+ * 2026-10 六域回補（跳轉模式）：星巴克開放平台僅面向企業資質 ISV，
+ * 個人主體不可得，故 place_order 改為「生成點單需求卡 + 跳轉星巴克
+ * 官方小程序完成真實點單與支付」（pending_external，EXTERNAL_JUMP
+ * 配置 starbucks appId 後生效；未配置時 copy-only）。訂單落庫
+ * MySQL（db.ts domain=coffee，重啟不丟），以 x-wx-openid 歸屬鑒權。
  */
 
 import type { RouteHandler } from './api';
 import { ok, fail, badRequest, unauthorized, forbidden } from './api';
+import { createOrder, getOrder, cancelOrder } from './db';
+import { buildJump } from './external-jump';
 
 /** SKU → 單價（分），未列舉的 SKU 按預設價 */
 const SKU_PRICE_CENT: Record<string, number> = {
@@ -28,9 +34,6 @@ const SKU_PRICE_CENT: Record<string, number> = {
   caramel_macchiato: 3800,
 };
 const DEFAULT_PRICE_CENT = 3000;
-
-/** 記憶體訂單表（MVP：重啟丟失、實例間不共享；owner 用於歸屬鑒權） */
-const orders = new Map<string, { storeId: string; amountCent: number; owner: string; createdAt: number }>();
 
 /**
  * 星巴克開放平台調用通道（憑證未配置時返回 null，呼叫方降級模擬）
@@ -117,6 +120,13 @@ const handlePlaceOrder: RouteHandler = async (body, ctx) => {
       return badRequest('items[].sku 必填且 quantity 必須 ≥ 1');
     }
   }
+  // 門市存在性校驗（與票務域嚴格校驗對齊）：模擬數據源目錄固定
+  // sb_001~sb_003（跨城市同號）；開放平台真實模式下門市 id 以平台為準，
+  // 跳過白名單
+  const starbucksReal = Boolean(process.env.STARBUCKS_BASE_URL && process.env.STARBUCKS_APP_KEY && process.env.STARBUCKS_APP_SECRET);
+  if (!starbucksReal && !['sb_001', 'sb_002', 'sb_003'].includes(input.storeId)) {
+    return fail(404, `門市不存在：${input.storeId}`);
+  }
   // 歸屬鑒權：寫操作必須攜帶雲托管注入的調用方身份（規範 § 10 SKILL 越權防護）
   if (!ctx.openid) {
     return unauthorized('缺少調用方身份（x-wx-openid），拒絕下單');
@@ -133,15 +143,34 @@ const handlePlaceOrder: RouteHandler = async (body, ctx) => {
   });
   const amountCent = items.reduce((s, it) => s + it.amountCent, 0);
 
+  /*
+   * 跳轉模式：訂單語義為「點單需求卡」（pending_external），真實點單與
+   * 支付在星巴克小程序側完成。SKU 單價表僅為估算展示，真實價格以
+   * 星巴克小程序點單頁為準。
+   */
   const orderId = `sbx_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-  orders.set(orderId, { storeId: input.storeId, amountCent, owner: ctx.openid, createdAt: Date.now() });
+  const pickupLabel = input.pickupType === 'takeaway' ? '外送' : '店內取餐';
+  const copyText = [
+    `星巴克點單（${pickupLabel}）`,
+    ...items.map((it) => `${it.name} ×${it.quantity}（約 ¥${(it.amountCent / 100).toFixed(2)}）`),
+    `合計約 ¥${(amountCent / 100).toFixed(2)}（以星巴克小程序實際價格為準）`,
+  ].join('\n');
+  await createOrder({
+    orderId,
+    owner: ctx.openid,
+    domain: 'coffee',
+    status: 'pending_external',
+    payload: { storeId: input.storeId, items, amountCent, pickupType: input.pickupType },
+    createdAt: Date.now(),
+  });
 
   return ok({
     orderId,
     storeId: input.storeId,
     items,
     amountCent,
-    status: 'pending_payment',
+    status: 'pending_external',
+    jump: buildJump('starbucks', copyText),
   });
 };
 
@@ -157,15 +186,15 @@ const handleCancel: RouteHandler = async (body, ctx) => {
   if (!ctx.openid) {
     return unauthorized('缺少調用方身份（x-wx-openid），拒絕取消');
   }
-  const order = orders.get(input.orderId);
-  if (!order) {
+  const order = await getOrder(input.orderId);
+  if (!order || order.domain !== 'coffee') {
     return fail(404, `訂單不存在或已取消：${input.orderId}`);
   }
   // 歸屬鑒權：僅訂單擁有者可取消（防 IDOR——枚舉 orderId 越權取消他人訂單）
-  if (order.owner !== ctx.openid) {
+  const result = await cancelOrder(input.orderId, ctx.openid);
+  if (result === 'forbidden') {
     return forbidden('無權取消他人訂單');
   }
-  orders.delete(input.orderId);
   return ok({ ok: true, orderId: input.orderId });
 };
 

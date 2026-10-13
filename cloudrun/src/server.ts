@@ -31,6 +31,7 @@ import { bookingRoutes } from './skill-booking';
 import { weatherRoutes } from './skill-weather';
 import { ticketRoutes } from './skill-ticket';
 import { counselingRoutes } from './skill-counseling';
+import { paymentRoutes } from './skill-payment';
 import { tripShareRoutes } from './trip-share';
 import { metricsRoutes } from './metrics';
 
@@ -54,6 +55,7 @@ const routes = new Map<string, RouteHandler>([
   ...weatherRoutes,
   ...ticketRoutes,
   ...counselingRoutes,
+  ...paymentRoutes,
   ...tripShareRoutes,
   ...metricsRoutes,
 ]);

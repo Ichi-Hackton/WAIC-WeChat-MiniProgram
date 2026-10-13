@@ -3,6 +3,12 @@
 # 微信雲托管要求：服務監聽 PORT 環境變數指定的埠（預設 80）
 FROM node:20-alpine
 
+# 北京時間：預設日期 / 時段表以本地時區取「今天」（skill-booking、
+# skill-ticket 的 dateAfterDays）；alpine 缺 tzdata 時 TZ 不生效，本地時區
+# 仍是 UTC，北京 00:00-08:00 會取到昨天
+RUN apk add --no-cache tzdata
+ENV TZ=Asia/Shanghai
+
 WORKDIR /app
 
 # 先複製依賴聲明再 install，利用 Docker 層緩存（devDependencies + dependencies）

@@ -1,7 +1,8 @@
 ﻿# 新 SKILL（購物 / 預約）端點冒煙測試（2026-10 跳轉模式斷言版）
 # checkout 斷言 pending_external + jumps 逐商品轉鏈 / 淘口令；
 # create_reservation 斷言 pending_external + meituan 跳轉包（時段目錄為演示參考，真實時段以美團為準）
-$h = 'http://127.0.0.1:8788'
+# 服務位址：跟隨 $env:PORT（與 dev-start.ps1 預設 8787 一致），可覆寫
+$h = "http://127.0.0.1:$(if ($env:PORT) { $env:PORT } else { 8787 })"
 $ownerHeaders = @{ 'x-wx-openid' = 'smoke-new-skills' }
 
 function Send-Json($Uri, $Headers, $Json) {

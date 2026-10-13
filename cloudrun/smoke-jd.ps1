@@ -1,7 +1,8 @@
 # 京東聯盟轉鏈端到端冒煙（2026-10 真實渠道上線）
 # 前置：JD_UNION_APP_KEY / JD_UNION_APP_SECRET / JD_UNION_POSITION_ID 已配置（推廣位過審後轉鏈可用）
 # 未配置憑證時 search 降級 demo 目錄（source=demo），腳本以 SKIP 標記跳過轉鏈斷言不判失敗
-$h = 'http://127.0.0.1:8788'
+# 服務位址：跟隨 $env:PORT（與 dev-start.ps1 預設 8787 一致），可覆寫
+$h = "http://127.0.0.1:$(if ($env:PORT) { $env:PORT } else { 8787 })"
 $ownerHeaders = @{ 'x-wx-openid' = 'smoke-jd-owner' }
 
 function Send-Json($Uri, $Headers, $Json) {

@@ -1,6 +1,6 @@
 # 演出票務 SKILL（skill.ticket.show）端點冒煙測試
-# 前置：cloudrun 目錄 npm run build 後以 PORT=8788 啟動 dist/server.js
-$h = 'http://127.0.0.1:8788'
+# 前置：cloudrun 目錄 .\dev-start.ps1 啟動（預設埠 8787，或以 $env:PORT 覆寫）
+$h = "http://127.0.0.1:$(if ($env:PORT) { $env:PORT } else { 8787 })"
 # 模擬微信雲托管注入的調用方身份（寫操作鑒權必需，見 server.ts x-wx-openid）
 $ownerHeaders = @{ 'x-wx-openid' = 'smoke-ticket-owner' }
 $otherHeaders = @{ 'x-wx-openid' = 'smoke-ticket-other' }

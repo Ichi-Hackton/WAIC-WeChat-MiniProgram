@@ -8,14 +8,18 @@
  *   POST /api/skill/skill.shopping.mall/checkout
  *   POST /api/skill/skill.shopping.mall/checkout/cancel      （rollback 專用）
  *
- * 2026-10 真實渠道上線（資料層重寫）：
+ * 2026-10 真實渠道上線（資料層重寫）+ 六域回補演示降級：
  *   search_products —— 京東聯盟 + 淘寶聯盟雙渠道真實商品聚合（任一渠道
- *     失敗跳過、雙渠道均不可用時誠實失敗 503，不提供演示目錄）
+ *     失敗跳過）。聯盟憑證完全未配置時（個人主體常態，與咖啡/票務/
+ *     預約域同基調）降級演示目錄 source='demo'，保證「搜索→加購→
+ *     結算→跳轉引導」全鏈路可演示；憑證已配置但渠道失敗/零結果時
+ *     誠實失敗 503（真實模式不容演示污染）
  *   add_to_cart     —— 心願單（落庫 shop_cart 域；真實商品不校驗庫存，
- *     聯盟無實時庫存，以渠道頁面為準）
+ *     聯盟無實時庫存，以渠道頁面為準；演示商品查演示目錄校驗存在性
+ *     與售罄）
  *   checkout        —— 轉鏈跳轉模式：京東商品經聯盟轉鏈取小程序跳轉
- *     指令（jCommand），淘寶商品生成淘口令複製；訂單 status=
- *     'pending_external' 落庫，真實下單支付在京東 / 淘寶側完成
+ *     指令（jCommand），淘寶商品生成淘口令複製，演示商品 copy-only；
+ *     訂單 status='pending_external' 落庫，真實下單支付在京東 / 淘寶側完成
  *
  * 購物車明細與訂單均落庫 MySQL（db.ts，重啟不丟），以 x-wx-openid
  * 歸屬鑒權（規範 § 10）。
@@ -49,6 +53,19 @@ interface SearchProductsInput {
   limit?: number;
 }
 
+/**
+ * 演示商品目錄（與小程序端 shopping-mall SKILL 的 MOCK_PRODUCTS 逐字同構，
+ * 保證雲端降級與小程序端離線 mock 展示一致；p_006 售罄供 409 斷言）
+ */
+const DEMO_PRODUCTS: Array<Omit<Product, 'channel' | 'shop' | 'jumpUrl'>> = [
+  { productId: 'p_001', name: '無線降噪耳機 Pro', category: '電子數碼', priceCent: 129900, stock: 12, rating: 4.8 },
+  { productId: 'p_002', name: '智能手錶 S6', category: '電子數碼', priceCent: 199900, stock: 5, rating: 4.7 },
+  { productId: 'p_003', name: '恆溫保溫杯 500ml', category: '日用百貨', priceCent: 8900, stock: 66, rating: 4.6 },
+  { productId: 'p_004', name: '精品咖啡豆 1kg', category: '食品', priceCent: 12800, stock: 30, rating: 4.9 },
+  { productId: 'p_005', name: '頸部按摩儀', category: '家用電器', priceCent: 29900, stock: 8, rating: 4.5 },
+  { productId: 'p_006', name: '輕量跑步鞋', category: '運動戶外', priceCent: 49900, stock: 0, rating: 4.4 },
+];
+
 const handleSearchProducts: RouteHandler = async (body) => {
   const input = (body ?? {}) as SearchProductsInput;
   const kw = input.keyword?.trim() ?? '';
@@ -78,9 +95,21 @@ const handleSearchProducts: RouteHandler = async (body) => {
     }
   }
 
-  // 雙渠道均未命中（未配置憑證 / 連線失敗 / 零結果）→ 誠實失敗：
-  // 2026-10 技能收斂後不再提供演示目錄（真實或失敗，不演）
+  // 憑證完全未配置（個人主體常態）→ 降級演示目錄（source='demo' 誠實標記），
+  // 與咖啡/票務/預約域「演示目錄 + 跳轉引導」基調對齊（2026-10 六域回補）
   if (collected.length === 0) {
+    if (!jdConfigured() && !tbConfigured()) {
+      const kwLower = kw || cat;
+      let list = DEMO_PRODUCTS;
+      if (kwLower) {
+        list = list.filter((p) => p.name.includes(kwLower) || p.category.includes(kwLower));
+      }
+      const products = list.slice(0, limit).map((p) => ({ ...p, channel: 'demo' as const, shop: '演示商鋪', jumpUrl: '' }));
+      const priceCentByProduct: Record<string, number> = {};
+      for (const p of products) priceCentByProduct[p.productId] = p.priceCent;
+      return ok({ products, priceCentByProduct, source: 'demo' });
+    }
+    // 憑證已配置但渠道失敗 / 零結果 → 誠實失敗（真實模式不容演示污染）
     return fail(503, '購物渠道暫不可用（聯盟憑證未配置或連線失敗），請稍後再試');
   }
 
@@ -91,10 +120,11 @@ const handleSearchProducts: RouteHandler = async (body) => {
   return ok({ products, priceCentByProduct, source: sources.join('+') });
 };
 
-/** 依 productId 前缀判別渠道（歷史演示前綴 p_ 不再識別，回商品不存在） */
-function channelOf(productId: string): 'jd' | 'taobao' | null {
+/** 依 productId 前缀判別渠道（p_ = 演示目錄商品，六域回補後重新識別） */
+function channelOf(productId: string): 'jd' | 'taobao' | 'demo' | null {
   if (productId.startsWith('jd_')) return 'jd';
   if (productId.startsWith('tb_')) return 'taobao';
+  if (productId.startsWith('p_')) return 'demo';
   return null;
 }
 
@@ -152,12 +182,26 @@ const handleAddToCart: RouteHandler = async (body, ctx) => {
   if (!channel) {
     return fail(404, `商品不存在：${input.productId}`);
   }
+  // 演示商品：查演示目錄校驗存在性與售罄（真實商品聯盟無實時庫存不校驗）
+  let demoName = '';
+  let demoPriceCent = 0;
+  if (channel === 'demo') {
+    const demo = DEMO_PRODUCTS.find((p) => p.productId === input.productId);
+    if (!demo) {
+      return fail(404, `商品不存在：${input.productId}`);
+    }
+    if (demo.stock <= 0) {
+      return fail(409, `商品已售罄：${demo.name}`);
+    }
+    demoName = demo.name;
+    demoPriceCent = demo.priceCent;
+  }
   // 真實商品：聯盟無實時庫存，價格以結算時渠道頁為準；名稱 / 價格由
   // 規劃鏈路 inputBindings 帶入（add_to_cart 入參擴展 name / priceCent）
-  const priceCent = typeof input.priceCent === 'number' && input.priceCent > 0 ? input.priceCent : 0;
+  const priceCent = demoPriceCent || (typeof input.priceCent === 'number' && input.priceCent > 0 ? input.priceCent : 0);
   await addToCartStore(ctx.openid, {
     productId: input.productId,
-    name: input.name?.trim() || input.productId,
+    name: input.name?.trim() || demoName || input.productId,
     quantity: input.quantity,
     priceCent,
     channel,

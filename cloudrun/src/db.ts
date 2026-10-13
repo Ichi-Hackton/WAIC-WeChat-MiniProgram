@@ -23,8 +23,11 @@ import { createPool, type Pool, type RowDataPacket, type ResultSetHeader } from 
 /**
  * 訂單業務域：train=火車票 flight=機票 shop=購物訂單 shop_cart=購物車明細
  * booking=生活預約 trip=行程分享（2026-10 評審 #4） metrics=埋點上報（#5）
+ * coffee=星巴克點單 ticket=演出票務（2026-10 六域回補上架）
  */
-export type OrderDomain = 'train' | 'flight' | 'shop' | 'shop_cart' | 'booking' | 'trip' | 'metrics';
+export type OrderDomain =
+  | 'train' | 'flight' | 'shop' | 'shop_cart' | 'booking' | 'trip' | 'metrics'
+  | 'coffee' | 'ticket';
 
 /**
  * 訂單狀態：

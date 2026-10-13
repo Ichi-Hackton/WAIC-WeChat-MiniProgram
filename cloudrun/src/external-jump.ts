@@ -22,8 +22,16 @@ export interface JumpTarget {
   path?: string;
 }
 
-/** 協議支援的跳轉渠道識別字（taobao 無微信小程序，恆為 copy-only） */
-export type JumpTargetKey = 'train_12306' | 'ota_flight' | 'jd' | 'meituan' | 'taobao' | 'none';
+/**
+ * 協議支援的跳轉渠道識別字（taobao 無微信小程序，恆為 copy-only）
+ *
+ * 2026-10 六域回補：新增 starbucks（星巴克點單）與 damai（演出票務）
+ * 兩個渠道位——個人主體拿不到對方開放 API 時，以「跳轉官方小程序
+ * 半屏完成點單 / 購票」替代（用戶明確要求的降級鏈路）。
+ */
+export type JumpTargetKey =
+  | 'train_12306' | 'ota_flight' | 'jd' | 'meituan' | 'taobao'
+  | 'starbucks' | 'damai' | 'none';
 
 /**
  * 預設目標表（EXTERNAL_JUMP 未配置 / 部分配置時的兜底）
@@ -38,6 +46,10 @@ const DEFAULT_TARGETS: Record<JumpTargetKey, JumpTarget> = {
   meituan: { appId: '' },
   // 淘寶系無微信小程序：微信生態内無法直接跳轉，固定走淘口令複製
   taobao: { appId: '' },
+  // 星巴克 / 大麥官方小程序 appId 未經公開管道確證，留空 = copy-only；
+  // 真機查證後經 EXTERNAL_JUMP 覆蓋（可帶 path 直達點單 / 演出頁）
+  starbucks: { appId: '' },
+  damai: { appId: '' },
   // 演示商品 / 無渠道兜底：僅複製清單，不跳轉
   none: { appId: '' },
 };

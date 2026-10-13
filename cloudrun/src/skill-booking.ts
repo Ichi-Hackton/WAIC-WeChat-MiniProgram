@@ -99,7 +99,11 @@ const handleSearchServices: RouteHandler = async (body) => {
   const input = (body ?? {}) as SearchServicesInput;
   const kw = input.keyword?.trim() ?? '';
   const cat = input.category?.trim() ?? '';
-  const date = input.date?.trim() || new Date().toISOString().slice(0, 10);
+  // 本地時區取「今天」（與 skill-ticket dateAfterDays 同口徑，避免
+  // toISOString 的 UTC 偏移在北京時間 00:00-08:00 取到昨天）
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const date = input.date?.trim() || today;
   if (!isValidDate(date)) {
     return badRequest('date 必須為 YYYY-MM-DD');
   }
@@ -135,8 +139,33 @@ const handleSearchServices: RouteHandler = async (body) => {
     if (first) firstAvailableStartTimeByService[s.serviceId] = first.startTime;
   }
 
+  // 與票務域 firstEventId / firstAvailableSessionId 同構的「首選便捷欄位」：
+  // 供後續任務以 inputBindings 單值直取。LLM 規劃實測對此類聚合欄位命名
+  // 有天然傾向（幻覺 data.firstServiceId / data.firstAvailableServiceId
+  // 層出不窮），與其攔截幻覺不如對齊供給；以「首個有可約時段的服務」
+  // 為基準，多欄位自洽不錯位（單服務命中場景與按 id 精準取等價）。
+  // 哨兵口徑與票務域統一為 null（原 '' / -1 會穿透綁定層注入臟入參；
+  // null 由小程序端 binding.ts 攔截 BINDING_FAILED 提前短路；無可約
+  // 時段時不再退化到首個服務——業務上不應對滿約服務續建預約）
+  const firstAvailableService = services.find((s) => s.slots.some((slot) => slot.available));
+  const firstServiceId = firstAvailableService?.serviceId ?? null;
+  const firstAvailableServiceId = firstServiceId;
+  const firstAvailableStartTime =
+    firstAvailableService?.slots.find((slot) => slot.available)?.startTime ?? null;
+  const firstPriceCent = firstAvailableService?.priceCent ?? null;
+
   // source 明示演示目錄（真實渠道模式下目錄僅為輔助參考，真實商家以美團為準）
-  return ok({ date, services, priceCentByService, firstAvailableStartTimeByService, source: 'demo' });
+  return ok({
+    date,
+    services,
+    priceCentByService,
+    firstAvailableStartTimeByService,
+    firstServiceId,
+    firstAvailableServiceId,
+    firstAvailableStartTime,
+    firstPriceCent,
+    source: 'demo',
+  });
 };
 
 interface CreateReservationInput {

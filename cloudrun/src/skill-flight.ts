@@ -415,6 +415,9 @@ const handleBook: RouteHandler = async (body, ctx) => {
   return ok({
     orderId,
     flightNo: input.flightNo,
+    // 乘機人姓名透出供購票資訊卡主卡面展示（實名攔截鏈保證必為真實值；
+// 證件號仍不透出，隱私口徑不變）
+    passengerName: input.passengerName,
     amountCent,
     status: 'pending_external',
     jump: buildJump('ota_flight', copyText),
