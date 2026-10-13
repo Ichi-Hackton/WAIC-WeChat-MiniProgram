@@ -94,8 +94,9 @@ function transformLng(x: number, y: number): number {
   return ret;
 }
 
-/** gcj02（火星座標）→ wgs84 / cgcs2000（天地圖座標系）；一階近似誤差 1~2 米 */
-function gcj02ToWgs84(lat: number, lng: number): { lat: number; lng: number } {
+/** gcj02（火星座標）→ wgs84 / cgcs2000（天地圖座標系）；一階近似誤差 1~2 米。
+ *  2026-10-13 導出：skill-map.ts（POI 搜尋）複用同一轉換，避免兩處各寫一份漂移 */
+export function gcj02ToWgs84(lat: number, lng: number): { lat: number; lng: number } {
   const dLat = transformLat(lng - 105, lat - 35);
   const dLng = transformLng(lng - 105, lat - 35);
   const radLat = (lat / 180) * Math.PI;
@@ -105,6 +106,25 @@ function gcj02ToWgs84(lat: number, lng: number): { lat: number; lng: number } {
   const dLatDeg = (dLat * 180) / (((KRASOVSKY_A * (1 - KRASOVSKY_EE)) / (magic * sqrtMagic)) * Math.PI);
   const dLngDeg = (dLng * 180) / ((KRASOVSKY_A / sqrtMagic) * Math.cos(radLat) * Math.PI);
   return { lat: lat - dLatDeg, lng: lng - dLngDeg };
+}
+
+/**
+ * wgs84 / cgcs2000（天地圖座標系）→ gcj02（火星座標）正向轉換
+ *
+ * 與 gcj02ToWgs84 對稱：skill-map.ts 把上游 POI 座標轉回 gcj02 出參，
+ * 保持「入參 gcj02、出參 gcj02」的全鏈路座標語義（小程序端 wx.openLocation /
+ * map 組件均消費 gcj02）。一階近似誤差 1~2 米，對門店級展示與導航足夠。
+ */
+export function wgs84ToGcj02(lat: number, lng: number): { lat: number; lng: number } {
+  const dLat = transformLat(lng - 105, lat - 35);
+  const dLng = transformLng(lng - 105, lat - 35);
+  const radLat = (lat / 180) * Math.PI;
+  let magic = Math.sin(radLat);
+  magic = 1 - KRASOVSKY_EE * magic * magic;
+  const sqrtMagic = Math.sqrt(magic);
+  const dLatDeg = (dLat * 180) / (((KRASOVSKY_A * (1 - KRASOVSKY_EE)) / (magic * sqrtMagic)) * Math.PI);
+  const dLngDeg = (dLng * 180) / ((KRASOVSKY_A / sqrtMagic) * Math.cos(radLat) * Math.PI);
+  return { lat: lat + dLatDeg, lng: lng + dLngDeg };
 }
 
 /*
