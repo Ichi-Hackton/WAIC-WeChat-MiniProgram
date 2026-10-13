@@ -1,8 +1,11 @@
 {
+  // 注意：不顯式宣告 moduleResolution —— TS 7 已移除 "node"（node10）策略，
+  // 而 IDE 內建 TS（< 5.0）不認識 "bundler"（會誤報 TS6046 與 resolveJsonModule 錯誤）；
+  // 不宣告時各版本各自回落默認（舊版 classic / TS 7 bundler），本專案全部為
+  // 顯式 /index 相對導入，兩種策略解析結果一致（已以 TS 4.9 / 5.6 / 7.0.2 實測零錯誤）。
   "compilerOptions": {
     "target": "ES2020",
     "module": "ESNext",
-    "moduleResolution": "bundler",
     "lib": ["ES2020", "DOM"],
     "strict": true,
     "noImplicitAny": true,
@@ -10,7 +13,6 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true
   },
