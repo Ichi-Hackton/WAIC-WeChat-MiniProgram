@@ -39,5 +39,13 @@ Thumbs.db
 .debug_tmp/
 .tmp-ui/
 
+# Qoder 工具臨時產物（登入二維碼 / 審計 diff 輸出 / 調試暫存目錄）
+.qoder/tmp/
+.qoder/login-qrcode.png
+.qoder/review_diff*.txt
+
+# 微信開發者工具驗證截圖（臨時取證產物，檔名含日期）
+devtools-screenshot-*.png
+
 # 微信開發者工具個人本地配置（多人協作時避免互相覆蓋本地設定）
 project.private.config.json
