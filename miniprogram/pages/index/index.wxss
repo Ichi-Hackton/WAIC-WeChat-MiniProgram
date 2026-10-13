@@ -1005,3 +1005,28 @@ page {
 .input-recording {
   color: #A04A3C;
 }
+
+/* ============ 記憶確認卡（確認式記憶提議，2026-10） ============ */
+
+/* 提議說明行（待確認提示 / 處理後回執文案） */
+.memory-note {
+  display: block;
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  color: #9a9489;
+  line-height: 1.5;
+}
+
+/* 操作按鈕行：「不用了」描邊鈕 + 「記住」主鈕等寬並排 */
+.memory-actions {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 16rpx;
+}
+
+.memory-actions .copy-btn,
+.memory-actions .pay-btn {
+  flex: 1;
+  margin: 0;
+  text-align: center;
+}

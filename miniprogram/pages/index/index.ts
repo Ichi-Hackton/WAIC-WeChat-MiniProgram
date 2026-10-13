@@ -156,7 +156,20 @@ interface PlanCard extends CardKey {
   payload: Record<string, unknown>;
 }
 
-type AnyCard = TrainCard | FlightCard | JumpCard | WeatherCard | GenericCard | PlanCard;
+/** 記憶卡（分層記憶）：顯式已記住的回執（remembered，無按鈕告知）與
+ * 推斷提議的確認卡（suggested，「以後都這樣做嗎？」）——點「記住」
+ * 落盤（下一輪規劃自動採用）、「不用了」丟棄且同值不再重複詢問 */
+interface MemoryCard extends CardKey {
+  type: 'memory';
+  /** 提議條目（label=中文域標籤如「高鐵座位」，value=偏好值如「靠窗」；
+   * status=remembered 已落盤回執 / suggested 待確認推斷提議） */
+  entries: Array<{ key: string; label: string; value: string; status: 'suggested' | 'remembered' }>;
+  /** pending=待確認（顯示按鈕）；confirmed / dismissed=已處理終態（顯示回執文案；
+   * 純 remembered 條目直接以 confirmed 回執態透出） */
+  status: 'pending' | 'confirmed' | 'dismissed';
+}
+
+type AnyCard = TrainCard | FlightCard | JumpCard | WeatherCard | GenericCard | PlanCard | MemoryCard;
 
 /* ============ 基礎模型 ============ */
 
@@ -242,6 +255,12 @@ interface HomePageThis {
   /** 到點提醒：檢查今日到期行程並以助理氣泡提醒（同日同行程僅一次） */
   remindDueTrips: () => void;
   onTapReset: () => void;
+  /** 記憶確認卡「記住」：pending 提議落盤 + 卡片轉已記住態 */
+  onConfirmMemory: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
+  /** 記憶確認卡「不用了」：丟棄提議（同鍵同值不再重複詢問）+ 卡片轉已取消態 */
+  onDismissMemory: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
+  /** 內部：就地更新記憶確認卡狀態（以消息 ID 定位，僅更新 pending 卡） */
+  updateMemoryCard: (msgId: string, status: 'confirmed' | 'dismissed') => void;
 }
 
 /** Agent 回應形狀 */
@@ -249,6 +268,9 @@ interface AgentRespShape {
   message: string;
   state: string;
   cards?: Array<{ type: string; title: string; payload: Record<string, unknown> }>;
+  /** 記憶卡提議（可選，AgentResponse.memoryProposal 的頁面側形狀）：
+   * remembered=已直接記住的回執條目；suggested=待確認推斷提議 */
+  memoryProposal?: Array<{ key: string; label: string; value: string; status: 'suggested' | 'remembered' }>;
   errorCode?: string;
 }
 
@@ -295,12 +317,16 @@ const CABIN_LABELS: Record<string, string> = {
 /** 車次卡最多展示班數（其餘以「共 N 班」摘要，避免長列表拖慢瀏覽） */
 const TRAIN_CARD_LIMIT = 3;
 
-/** 出廠範例（無常用話語記錄時的快捷入口；label 短標籤 + text 完整指令） */
+/** 出廠範例（無常用話語記錄時的快捷入口；label 短標籤 + text 完整指令）。
+ * 2026-10 六域回補：範例覆蓋出行 + 回補域代表場景（機票 / 天氣 / 購物 /
+ * 支付由對話直達，不擠佔有限入口） */
 const DEFAULT_EXAMPLES: Array<{ text: string; label: string }> = [
   { text: '明天北京到上海的高鐵，二等座', label: '查高鐵車次' },
-  { text: '明天北京飛上海的機票', label: '查機票航班' },
-  { text: '現在天氣怎麼樣', label: '查天氣' },
+  { text: '來杯拿鐵', label: '點杯咖啡' },
+  { text: '幫我買周杰倫演唱會的票', label: '買演出票' },
+  { text: '預約明天下午羽毛球場地', label: '生活預約' },
   { text: '周六去上海看球賽', label: '規劃行程' },
+  { text: '有點難過，陪我聊聊', label: '陪伴聊天' },
 ];
 
 /** 快捷入口最多展示數（與出廠範例數對齊，避免擠佔輸入區） */
@@ -431,6 +457,7 @@ function buildTrainOrderCard(data: unknown): JumpCard | null {
   const d = data as {
     orderId?: unknown;
     trainNo?: unknown;
+    passengerName?: unknown;
     amountCent?: unknown;
     status?: unknown;
     jump?: { target?: unknown; appId?: unknown; path?: unknown; jCommand?: unknown; copyText?: unknown; note?: unknown } | undefined;
@@ -446,6 +473,10 @@ function buildTrainOrderCard(data: unknown): JumpCard | null {
     title: '購票資訊卡已生成',
     lines: [
       { label: '車次', value: String(d.trainNo ?? '') },
+      // 乘車人上卡（實名攔截鏈保證必為真實值）：跳轉 12306 前二次核對，
+      // 舊單數據（無此欄位）自動省略該行；證件號仍不展示（隱私）
+      ...(typeof d.passengerName === 'string' && d.passengerName
+        ? [{ label: '乘車人', value: d.passengerName }] : []),
       { label: '票價', value: formatPrice(amountCent), highlight: true },
       { label: '狀態', value: d.status === 'completed' ? '已完成' : d.status === 'cancelled' ? '已取消' : '待跳轉下單' },
       { label: '訂單號', value: d.orderId },
@@ -456,6 +487,345 @@ function buildTrainOrderCard(data: unknown): JumpCard | null {
     ...(appId
       ? { jumpBtn: { appId, path: typeof jump?.jCommand === 'string' && jump.jCommand ? jump.jCommand : typeof jump?.path === 'string' ? jump.path : '', label: '前往 12306 下單' } }
       : {}),
+  };
+}
+
+/* ============ 2026-10 六域回補：交付卡構造（unknown 防禦性窄化，§ 12.2） ============ */
+
+/** 通用窄化：未知值 → 字串（非字串或缺席為空串） */
+function asText(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+/** 通用窄化：未知值 → 分單位金額（非數字為 0） */
+function asCents(v: unknown): number {
+  return typeof v === 'number' ? v : 0;
+}
+
+/** 跳轉包窄化形狀（與 types/skill.d.ts JumpPackage 對齊；appId 空 = copy-only） */
+interface JumpShape {
+  appId: string;
+  path: string;
+  jCommand: string;
+  copyText: string;
+  note: string;
+}
+
+function asJump(v: unknown): JumpShape {
+  const j = (v ?? {}) as Record<string, unknown>;
+  return {
+    appId: typeof j.appId === 'string' ? j.appId : '',
+    path: typeof j.path === 'string' ? j.path : '',
+    jCommand: typeof j.jCommand === 'string' ? j.jCommand : '',
+    copyText: typeof j.copyText === 'string' ? j.copyText : '',
+    note: typeof j.note === 'string' ? j.note : '',
+  };
+}
+
+/** search_store 成功 → 門市清單卡（前三家；「來杯咖啡」查詢結果） */
+function buildStoreCard(data: unknown): GenericCard | null {
+  const d = data as { city?: unknown; stores?: unknown } | undefined;
+  const stores = Array.isArray(d?.stores) ? (d?.stores as Array<Record<string, unknown>>) : [];
+  if (stores.length === 0) return null;
+  const lines = stores.slice(0, 3).map((s, i) => ({
+    label: `門市 ${i + 1}`,
+    value: `${asText(s.name)}（${asText(s.address)}）`,
+  }));
+  return {
+    type: 'generic',
+    key: `stores-${asText(d?.city)}-${stores.length}`,
+    title: `${asText(d?.city) || '附近'}星巴克門市`,
+    lines,
+  };
+}
+
+/** place_order 成功 → 點單需求卡（跳轉星巴克完成真實交易） */
+function buildCoffeeOrderCard(data: unknown): JumpCard | null {
+  const d = data as {
+    orderId?: unknown;
+    items?: unknown;
+    amountCent?: unknown;
+    status?: unknown;
+    jump?: unknown;
+  } | undefined;
+  if (!d || typeof d.orderId !== 'string') return null;
+  const items = Array.isArray(d.items) ? (d.items as Array<Record<string, unknown>>) : [];
+  const amountCent = asCents(d.amountCent);
+  const jump = asJump(d.jump);
+  const detail = items.map((it) => `${asText(it.name)} ×${typeof it.quantity === 'number' ? it.quantity : 1}`).join('、');
+  return {
+    type: 'jump',
+    key: `coffee-${d.orderId}`,
+    title: '點單需求卡已生成',
+    lines: [
+      { label: '明細', value: detail || '咖啡點單' },
+      { label: '合計', value: formatPrice(amountCent), highlight: true },
+      { label: '狀態', value: d.status === 'completed' ? '已完成' : d.status === 'cancelled' ? '已取消' : '待跳轉下單' },
+      { label: '訂單號', value: d.orderId },
+    ],
+    note: jump.note || '真實交易於星巴克小程序完成，價格與優惠以門市為準',
+    copyText: jump.copyText || `星巴克點單 ${detail} 約 ¥${(amountCent / 100).toFixed(2)}`,
+    ...(jump.appId
+      ? { jumpBtn: { appId: jump.appId, path: jump.jCommand || jump.path, label: '前往星巴克下單' } }
+      : {}),
+  };
+}
+
+/** search_products 成功 → 商品清單卡（前三件） */
+function buildProductsCard(data: unknown): GenericCard | null {
+  const d = data as { products?: unknown } | undefined;
+  const products = Array.isArray(d?.products) ? (d?.products as Array<Record<string, unknown>>) : [];
+  if (products.length === 0) return null;
+  const lines = products.slice(0, 3).map((p, i) => ({
+    label: `商品 ${i + 1}`,
+    value: `${asText(p.name)} ¥${(asCents(p.priceCent) / 100).toFixed(2)}`,
+  }));
+  return {
+    type: 'generic',
+    key: `products-${products.length}-${asText(products[0]?.productId)}`,
+    title: '商城搜尋結果',
+    lines,
+  };
+}
+
+/** add_to_cart 成功 → 加購回執卡 */
+function buildCartCard(data: unknown): GenericCard | null {
+  const d = data as { productId?: unknown; name?: unknown; quantity?: unknown; cartCount?: unknown } | undefined;
+  const name = asText(d?.name);
+  if (!name) return null;
+  return {
+    type: 'generic',
+    key: `cart-${asText(d?.productId)}-${Date.now()}`,
+    title: '已加入購物車',
+    lines: [
+      { label: '商品', value: name },
+      { label: '數量', value: String(typeof d?.quantity === 'number' ? d?.quantity : 1) },
+      ...(typeof d?.cartCount === 'number' ? [{ label: '購物車', value: `共 ${d.cartCount} 件` }] : []),
+    ],
+  };
+}
+
+/** checkout 成功 → 結算需求卡（跳轉京東 / 淘寶完成真實下單） */
+function buildCheckoutCard(data: unknown): JumpCard | null {
+  const d = data as {
+    orderId?: unknown;
+    items?: unknown;
+    amountCent?: unknown;
+    status?: unknown;
+    jump?: unknown;
+  } | undefined;
+  if (!d || typeof d.orderId !== 'string') return null;
+  const items = Array.isArray(d.items) ? (d.items as Array<Record<string, unknown>>) : [];
+  const amountCent = asCents(d.amountCent);
+  const jump = asJump(d.jump);
+  const detail = items.map((it) => `${asText(it.name)} ×${typeof it.quantity === 'number' ? it.quantity : 1}`).join('、');
+  return {
+    type: 'jump',
+    key: `checkout-${d.orderId}`,
+    title: '購物結算卡已生成',
+    lines: [
+      { label: '明細', value: detail || '購物車商品' },
+      { label: '合計', value: formatPrice(amountCent), highlight: true },
+      { label: '狀態', value: d.status === 'completed' ? '已完成' : d.status === 'cancelled' ? '已取消' : '待跳轉下單' },
+      { label: '訂單號', value: d.orderId },
+    ],
+    note: jump.note || '真實交易於京東 / 淘寶完成，價格與優惠以下單頁為準',
+    copyText: jump.copyText || `購物結算 ${detail} 約 ¥${(amountCent / 100).toFixed(2)}`,
+    ...(jump.appId
+      ? { jumpBtn: { appId: jump.appId, path: jump.jCommand || jump.path, label: '前往京東下單' } }
+      : {}),
+  };
+}
+
+/** search_services 成功 → 服務清單卡（前三項含首個可約時段） */
+function buildServicesCard(data: unknown): GenericCard | null {
+  const d = data as { date?: unknown; services?: unknown } | undefined;
+  const services = Array.isArray(d?.services) ? (d?.services as Array<Record<string, unknown>>) : [];
+  if (services.length === 0) return null;
+  const lines = services.slice(0, 3).map((s, i) => {
+    const slots = Array.isArray(s.slots) ? (s.slots as Array<Record<string, unknown>>) : [];
+    const firstAvail = slots.find((sl) => sl.available === true);
+    const slotLabel = firstAvail ? `，首個可約 ${asText(firstAvail.startTime)}` : '';
+    return {
+      label: `服務 ${i + 1}`,
+      value: `${asText(s.name)} ¥${(asCents(s.priceCent) / 100).toFixed(2)}${slotLabel}`,
+    };
+  });
+  return {
+    type: 'generic',
+    key: `services-${asText(d?.date)}-${services.length}`,
+    title: `${asText(d?.date) || '今日'}可預約服務`,
+    lines,
+  };
+}
+
+/** create_reservation 成功 → 預約需求卡（跳轉美團完成真實預約） */
+function buildReservationCard(data: unknown): JumpCard | null {
+  const d = data as {
+    reservationId?: unknown;
+    name?: unknown;
+    provider?: unknown;
+    date?: unknown;
+    startTime?: unknown;
+    endTime?: unknown;
+    status?: unknown;
+    jump?: unknown;
+  } | undefined;
+  if (!d || typeof d.reservationId !== 'string') return null;
+  const jump = asJump(d.jump);
+  return {
+    type: 'jump',
+    key: `reserve-${d.reservationId}`,
+    title: '預約需求卡已生成',
+    lines: [
+      { label: '服務', value: asText(d.name) || '生活服務' },
+      { label: '商家', value: asText(d.provider) },
+      { label: '時間', value: `${asText(d.date)} ${asText(d.startTime)}${asText(d.endTime) ? '-' + asText(d.endTime) : ''}` },
+      { label: '狀態', value: d.status === 'completed' ? '已完成' : d.status === 'cancelled' ? '已取消' : '待跳轉預約' },
+    ],
+    note: jump.note || '真實預約於美團小程序完成，時段與價格以商家頁為準',
+    copyText: jump.copyText || `預約 ${asText(d.name)} ${asText(d.date)} ${asText(d.startTime)}`,
+    ...(jump.appId
+      ? { jumpBtn: { appId: jump.appId, path: jump.jCommand || jump.path, label: '前往美團預約' } }
+      : {}),
+  };
+}
+
+/** list_reservations 成功 → 我的預約清單卡 */
+function buildReservationsCard(data: unknown): GenericCard | null {
+  const d = data as { reservations?: unknown } | undefined;
+  const list = Array.isArray(d?.reservations) ? (d?.reservations as Array<Record<string, unknown>>) : [];
+  if (list.length === 0) return null;
+  const lines = list.slice(0, 4).map((r, i) => ({
+    label: `預約 ${i + 1}`,
+    value: `${asText(r.name)} ${asText(r.date)} ${asText(r.startTime)}`,
+  }));
+  return {
+    type: 'generic',
+    key: `reservations-${list.length}`,
+    title: '我的預約',
+    lines,
+  };
+}
+
+/** search_events 成功 → 演出清單卡（前三場含最低價） */
+function buildEventsCard(data: unknown): GenericCard | null {
+  const d = data as { events?: unknown } | undefined;
+  const events = Array.isArray(d?.events) ? (d?.events as Array<Record<string, unknown>>) : [];
+  if (events.length === 0) return null;
+  const lines = events.slice(0, 3).map((e, i) => ({
+    label: `演出 ${i + 1}`,
+    value: `${asText(e.name)}（${asText(e.city)} · ¥${(asCents(e.minPriceCent) / 100).toFixed(0)}起）`,
+  }));
+  return {
+    type: 'generic',
+    key: `events-${events.length}-${asText(events[0]?.eventId)}`,
+    title: `演出搜尋結果（共 ${events.length} 場）`,
+    lines,
+  };
+}
+
+/** list_sessions 成功 → 場次票檔卡（前兩場各檔票價與餘票） */
+function buildSessionsCard(data: unknown): GenericCard | null {
+  const d = data as { event?: unknown; sessions?: unknown } | undefined;
+  const sessions = Array.isArray(d?.sessions) ? (d?.sessions as Array<Record<string, unknown>>) : [];
+  if (sessions.length === 0) return null;
+  const eventName = asText((d?.event as Record<string, unknown> | undefined)?.name);
+  const lines: Array<{ label: string; value: string }> = [];
+  for (const s of sessions.slice(0, 2)) {
+    const tiers = Array.isArray(s.priceTiers) ? (s.priceTiers as Array<Record<string, unknown>>) : [];
+    const tierLabel = tiers
+      .slice(0, 3)
+      .map((t) => `${asText(t.name)} ¥${(asCents(t.priceCent) / 100).toFixed(0)}${typeof t.inventory === 'number' && t.inventory > 0 ? '' : '（無票）'}`)
+      .join('；');
+    lines.push({ label: `${asText(s.date)} ${asText(s.startTime)}`, value: tierLabel || '票檔待查' });
+  }
+  return {
+    type: 'generic',
+    key: `sessions-${asText((d?.event as Record<string, unknown> | undefined)?.eventId)}-${sessions.length}`,
+    title: eventName ? `${eventName} · 場次票檔` : '場次票檔',
+    lines,
+  };
+}
+
+/** ticket create_order 成功 → 購票需求卡（跳轉大麥完成真實購票） */
+function buildTicketOrderCard(data: unknown): JumpCard | null {
+  const d = data as {
+    orderId?: unknown;
+    eventName?: unknown;
+    sessionDate?: unknown;
+    startTime?: unknown;
+    tierName?: unknown;
+    quantity?: unknown;
+    amountCent?: unknown;
+    status?: unknown;
+    jump?: unknown;
+  } | undefined;
+  if (!d || typeof d.orderId !== 'string') return null;
+  const amountCent = asCents(d.amountCent);
+  const jump = asJump(d.jump);
+  const qty = typeof d.quantity === 'number' ? d.quantity : 1;
+  return {
+    type: 'jump',
+    key: `ticket-${d.orderId}`,
+    title: '購票需求卡已生成',
+    lines: [
+      { label: '演出', value: asText(d.eventName) || '演出票' },
+      { label: '場次', value: `${asText(d.sessionDate)} ${asText(d.startTime)}` },
+      { label: '票檔', value: `${asText(d.tierName)} ×${qty}` },
+      { label: '金額', value: formatPrice(amountCent), highlight: true },
+      { label: '狀態', value: d.status === 'completed' ? '已完成' : d.status === 'cancelled' ? '已取消' : '待跳轉下單' },
+    ],
+    note: jump.note || '真實購票於大麥小程序完成，票價與票檔以下單頁為準',
+    copyText: jump.copyText || `演出 ${asText(d.eventName)} ${asText(d.sessionDate)} ${asText(d.startTime)} ${asText(d.tierName)} ×${qty}`,
+    ...(jump.appId
+      ? { jumpBtn: { appId: jump.appId, path: jump.jCommand || jump.path, label: '前往大麥下單' } }
+      : {}),
+  };
+}
+
+/** ticket list_orders 成功 → 我的票務訂單清單卡 */
+function buildTicketOrdersCard(data: unknown): GenericCard | null {
+  const d = data as { orders?: unknown } | undefined;
+  const list = Array.isArray(d?.orders) ? (d?.orders as Array<Record<string, unknown>>) : [];
+  if (list.length === 0) return null;
+  const lines = list.slice(0, 4).map((o, i) => ({
+    label: `訂單 ${i + 1}`,
+    value: `${asText(o.eventName)} ${asText(o.sessionDate)}（${asText(o.tierName)}）`,
+  }));
+  return {
+    type: 'generic',
+    key: `ticket-orders-${list.length}`,
+    title: '我的票務訂單',
+    lines,
+  };
+}
+
+/** pay_orders 成功 → 待支付訂單聚合卡（2026-10 六域回補：聚合收銀台
+ *  引導——逐單列域標籤 + 金額，複製全文即可轉發 / 留存；多渠道無法
+ *  單按鈕跳轉，用戶逐單說「訂單 XXX」可重建對應渠道跳轉卡） */
+function buildPayGuideCard(data: unknown): JumpCard | null {
+  const d = data as { orders?: unknown; count?: unknown; totalCent?: unknown } | undefined;
+  const orders = Array.isArray(d?.orders) ? (d?.orders as Array<Record<string, unknown>>) : [];
+  const totalCent = asCents(d?.totalCent);
+  if (orders.length === 0) return null;
+  const lines = orders.slice(0, 5).map((o, i) => ({
+    label: `訂單 ${i + 1}`,
+    value: `【${asText(o.domainLabel) || asText(o.domain)}】${asText(o.title)} ¥${(asCents(o.amountCent) / 100).toFixed(2)}`,
+  }));
+  const copyText = orders
+    .map((o) => `【${asText(o.domainLabel) || asText(o.domain)}】${asText(o.title)} ¥${(asCents(o.amountCent) / 100).toFixed(2)}（訂單號 ${asText(o.orderId)}）`)
+    .join('\n');
+  return {
+    type: 'jump',
+    key: `payguide-${Date.now()}`,
+    title: `待支付訂單（${typeof d?.count === 'number' ? d.count : orders.length} 單）`,
+    lines: [
+      ...lines,
+      { label: '合計', value: `${formatPrice(totalCent)}（以各渠道下單頁為準）`, highlight: true },
+    ],
+    note: '真實支付在對應官方渠道完成：逐單點擊對應購票 / 點單卡上的「前往下單」，或複製清單逐一前往',
+    copyText,
   };
 }
 
@@ -505,6 +875,7 @@ function buildFlightOrderCard(data: unknown): JumpCard | null {
   const d = data as {
     orderId?: unknown;
     flightNo?: unknown;
+    passengerName?: unknown;
     amountCent?: unknown;
     status?: unknown;
     jump?: { target?: unknown; appId?: unknown; path?: unknown; jCommand?: unknown; copyText?: unknown; note?: unknown } | undefined;
@@ -520,6 +891,9 @@ function buildFlightOrderCard(data: unknown): JumpCard | null {
     title: '機票購票資訊卡已生成',
     lines: [
       { label: '航班', value: String(d.flightNo ?? '') },
+      // 乘機人上卡（與火車購票卡同構）：跳轉 OTA 前二次核對
+      ...(typeof d.passengerName === 'string' && d.passengerName
+        ? [{ label: '乘機人', value: d.passengerName }] : []),
       { label: '票價', value: formatPrice(amountCent), highlight: true },
       { label: '狀態', value: d.status === 'completed' ? '已完成' : d.status === 'cancelled' ? '已取消' : '待跳轉下單' },
       { label: '訂單號', value: d.orderId },
@@ -911,6 +1285,25 @@ Page({
         wx.showToast({ title: '請等待當前任務完成', icon: 'none' });
       }
 
+      // 3. 記憶卡 → 追加（分層記憶）：純 remembered 條目（顯式已落盤）
+      //    直接以回執態透出（告知而非詢問）；含 suggested 條目（推斷提議）
+      //    以 pending 態透出確認卡，用戶點「記住」才落盤
+      if (res.memoryProposal && res.memoryProposal.length > 0) {
+        logInfo(`助手回覆（記憶卡）：${res.memoryProposal.map((p) => p.label).join('、')}`);
+        this.appendMessage({
+          id: this.nextMsgId(),
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          cards: [{
+            key: `memory-${Date.now()}`,
+            type: 'memory',
+            entries: res.memoryProposal,
+            status: res.memoryProposal.every((p) => p.status === 'remembered') ? 'confirmed' : 'pending',
+          }],
+        });
+      }
+
       this.setData({
         loading: false,
         state: finalState,
@@ -932,6 +1325,49 @@ Page({
         stateLabel: STATE_LABELS.failed,
       });
     }
+  },
+
+  /** 記憶確認卡「記住」：以卡面 suggested 條目回傳落盤（所見即所寫）
+   * + 卡片轉已記住態（僅 pending 卡可點；remembered 條目已落盤無需回傳） */
+  onConfirmMemory(this: HomePageThis, e: { currentTarget?: { dataset?: { msgId?: string } } }): void {
+    const msgId = e.currentTarget?.dataset?.msgId ?? '';
+    if (!msgId) return;
+    const agent = getAgent();
+    if (!agent) return;
+    // 以卡面条目定位（msgId → pending 記憶卡）：確認數據由 UI 回傳，
+    // 不依賴 storage 中間態（orchestrator 透出時已讀即清 pending）
+    const card = this.data.messages
+      .find((m) => m.id === msgId)
+      ?.cards?.find((c): c is MemoryCard => c.type === 'memory' && c.status === 'pending');
+    if (!card) return;
+    const written = agent.confirmMemory(card.entries.filter((p) => p.status === 'suggested'));
+    this.updateMemoryCard(msgId, 'confirmed');
+    if (written.length > 0) {
+      wx.showToast({ title: '已記住，之後自動為你採用', icon: 'none' });
+    }
+  },
+
+  /** 記憶確認卡「不用了」：丟棄提議（同鍵同值不再重複詢問）+ 卡片轉已取消態 */
+  onDismissMemory(this: HomePageThis, e: { currentTarget?: { dataset?: { msgId?: string } } }): void {
+    const msgId = e.currentTarget?.dataset?.msgId ?? '';
+    if (!msgId) return;
+    const agent = getAgent();
+    if (!agent) return;
+    agent.dismissMemory();
+    this.updateMemoryCard(msgId, 'dismissed');
+  },
+
+  /** 內部：就地更新記憶確認卡狀態（以消息 ID 定位；僅 pending 態卡片
+   *  會被更新，防止重複點擊 / 已處理卡被誤改） */
+  updateMemoryCard(this: HomePageThis, msgId: string, status: 'confirmed' | 'dismissed'): void {
+    const messages = this.data.messages.map((msg) => {
+      if (msg.id !== msgId) return msg;
+      const cards = (msg.cards ?? []).map((c) =>
+        c.type === 'memory' && c.status === 'pending' ? { ...c, status } : c,
+      );
+      return { ...msg, cards };
+    });
+    this.setData({ messages });
   },
 
   /** runtime 事件：狀態機轉移 → 更新狀態列與 loading 氣泡文案 */
@@ -1016,12 +1452,44 @@ Page({
     if (task.status !== 'succeeded' || !task.result?.data) return;
     const data: unknown = task.result.data;
 
+    // 陪伴對話特判（2026-10 六域回補）：對話形態成果以純文本氣泡呈現
+    // （非卡片——與任務型交付的「卡片即結論」原則區分），reply 冠
+    // ai_generated 標識（§ 10 合規紅線）；登記交付避免收尾重複展示聚合摘要
+    if (task.action === 'chat_companion') {
+      const reply = (data as { reply?: unknown }).reply;
+      if (typeof reply !== 'string' || !reply.trim()) return;
+      const text = `${BRAND_AI_GENERATED_BY}\n${reply}`;
+      logInfo(`助手回覆（陪伴對話）：${text.slice(0, 80)}`);
+      this.deliveredTaskIds.add(task.id);
+      this.appendMessage({
+        id: this.nextMsgId(),
+        role: 'assistant',
+        content: text,
+        timestamp: Date.now(),
+      });
+      return;
+    }
+
     let card: AnyCard | null = null;
     if (task.action === 'search_train') card = buildTrainCard(data);
     else if (task.action === 'book_ticket') card = buildTrainOrderCard(data);
     else if (task.action === 'search_flights') card = buildFlightCard(data);
     else if (task.action === 'book_flight') card = buildFlightOrderCard(data);
     else if (task.action === 'get_weather') card = buildWeatherCard(data);
+    // 2026-10 六域回補：咖啡 / 購物 / 預約 / 票務 / 支付聚合
+    else if (task.action === 'search_store') card = buildStoreCard(data);
+    else if (task.action === 'place_order') card = buildCoffeeOrderCard(data);
+    else if (task.action === 'search_products') card = buildProductsCard(data);
+    else if (task.action === 'add_to_cart') card = buildCartCard(data);
+    else if (task.action === 'checkout') card = buildCheckoutCard(data);
+    else if (task.action === 'search_services') card = buildServicesCard(data);
+    else if (task.action === 'create_reservation') card = buildReservationCard(data);
+    else if (task.action === 'list_reservations') card = buildReservationsCard(data);
+    else if (task.action === 'search_events') card = buildEventsCard(data);
+    else if (task.action === 'list_sessions') card = buildSessionsCard(data);
+    else if (task.action === 'create_order') card = buildTicketOrderCard(data);
+    else if (task.action === 'list_orders') card = buildTicketOrdersCard(data);
+    else if (task.action === 'pay_orders') card = buildPayGuideCard(data);
     if (!card) {
       // 未知 action → interaction/card-render 通用兜底卡（成功結果不靜默丟棄）
       const rc = renderTaskFallback(task);

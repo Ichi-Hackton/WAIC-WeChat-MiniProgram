@@ -173,6 +173,27 @@
                 </view>
               </view>
 
+              <!-- 記憶卡（分層記憶）：推斷提議——確認卡詢問「以後都這樣
+                  做嗎？」，點「記住」落盤、「不用了」丟棄且同值不再重複詢問；
+                  顯式已記住——直接以回執態透出（無按鈕，告知而非詢問） -->
+              <view wx:elif="{{card.type === 'memory'}}" class="card-delivery">
+                <view class="order-head">
+                  <text class="order-mark">·</text>
+                  <text class="delivery-title">{{card.status === 'pending' ? '以後都這樣為你安排嗎？' : (card.status === 'confirmed' ? '已記住 ✓' : '已取消')}}</text>
+                </view>
+                <view class="order-body">
+                  <view wx:for="{{card.entries}}" wx:for-item="entry" wx:key="key" class="order-line">
+                    <text class="order-label">{{entry.label}}</text>
+                    <text class="order-value">{{entry.value}}</text>
+                  </view>
+                  <text class="memory-note">{{card.status === 'pending' ? '點「記住」後，之後規劃任務時自動為你採用' : (card.status === 'confirmed' ? '之後規劃任務時自動為你採用' : '好的，這次不會記住，之後也不再問')}}</text>
+                  <view wx:if="{{card.status === 'pending'}}" class="memory-actions">
+                    <view class="copy-btn" hover-class="btn-hover" bindtap="onDismissMemory" data-msg-id="{{item.id}}">不用了</view>
+                    <view class="pay-btn" hover-class="btn-hover" bindtap="onConfirmMemory" data-msg-id="{{item.id}}">記住</view>
+                  </view>
+                </view>
+              </view>
+
               <!-- 計劃步驟卡：序號方塊 + 時間標籤 + 中文摘要 + 狀態徽章（不展示 skillId 等技術標識） -->
               <view wx:else class="plan-card">
                 <view class="step-no step-{{card.payload.status}}">{{card.payload.seq}}</view>

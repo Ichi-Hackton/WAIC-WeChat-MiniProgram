@@ -30,6 +30,47 @@
     </view>
   </view>
 
+  <!-- ═══ 收貨地址（地址簿；出行規劃自動帶入出發城市）═══ -->
+  <view class="section section-late">
+    <view class="section-head">
+      <text class="section-title">收貨地址</text>
+      <view class="section-add" hover-class="btn-hover" bindtap="onAddAddress">＋ 新增</view>
+    </view>
+
+    <!-- 空簿：引導 + 一鍵導入微信地址（導入即存，最快建立出發城市來源） -->
+    <view wx:if="{{addresses.length === 0}}" class="empty-hint">
+      尚未填寫地址。填寫後，出行規劃（車次 / 航班查詢）將自動以默認地址的城市作為出發城市，無需每次追問。
+    </view>
+    <view
+      wx:if="{{addresses.length === 0}}"
+      class="empty-import-btn"
+      hover-class="btn-hover"
+      bindtap="onTapImportAddress"
+    >一鍵帶入微信地址</view>
+
+    <view class="list-card">
+      <view
+        wx:for="{{addresses}}"
+        wx:key="id"
+        class="list-row"
+        hover-class="row-hover"
+        bindtap="onTapAddress"
+        data-id="{{item.id}}"
+      >
+        <view class="row-main">
+          <view class="row-title-line">
+            <text class="row-title">{{item.receiverName}}</text>
+            <text class="row-title-sub">{{item.phoneMasked}}</text>
+            <view wx:if="{{item.isDefault}}" class="badge">默認</view>
+          </view>
+          <text class="row-sub">{{item.regionLine}}</text>
+          <text class="row-sub">{{item.detail}}</text>
+        </view>
+        <text class="row-arrow">›</text>
+      </view>
+    </view>
+  </view>
+
   <!-- 隱私說明（§ 10 紅線：個人敏感信息僅存本機） -->
-  <text class="privacy-hint">證件信息僅存於本機，用於下單時自動帶入，不上傳雲端。</text>
+  <text class="privacy-hint">證件與地址信息僅存於本機，用於下單自動帶入與出行規劃出發城市推斷，不上傳雲端。</text>
 </view>

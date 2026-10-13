@@ -3,7 +3,8 @@
     "pages/index/index",
     "pages/profile/index",
     "pages/trips/index",
-    "pages/passenger-edit/index"
+    "pages/passenger-edit/index",
+    "pages/address-edit/index"
   ],
   "window": {
     "navigationBarTitleText": "MicroMate",
@@ -19,5 +20,5 @@
       "desc": "用於查詢所在地天氣與出行規劃"
     }
   },
-  "requiredPrivateInfos": ["getLocation"]
+  "requiredPrivateInfos": ["getLocation", "chooseAddress"]
 }
