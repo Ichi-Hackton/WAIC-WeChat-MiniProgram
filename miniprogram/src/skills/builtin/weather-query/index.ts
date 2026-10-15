@@ -12,7 +12,7 @@
  * 直接追問用戶，不生成任務。
  *
  * 與雲端 skill-weather.ts 的端點路徑逐字對齊；雲端不可用（負數碼 =
- * 雲基礎設施錯誤，見 coffee SKILL 說明）或 WEATHERCN_KEY 未配置 /
+ * 雲基礎設施錯誤，見 coffee SKILL 說明）或 AMAP_KEY 未配置 /
  * 上游失敗（業務 503）時，以確定性模擬數據降級（djb2 雜湊 seed = 日期 +
  * 網格座標，同日同位置演示數據穩定），卡片以 source='mock' 標識「模擬數
  * 據」，不誤導用戶。
@@ -41,12 +41,12 @@ export interface WeatherInfo {
   /** 濕度（百分比，字串形態） */
   humidity: string;
   windDirection: string;
-  /** 風速（上游公制文案，如「12 km/h」） */
+  /** 風力等級（上游文案，如「≤3」；2026-10-14 切回高德，華風風速文案復原） */
   windPower: string;
-  /** 數據發布時間（如 "2026-10-09 14:32:00"） */
+  /** 數據發布時間（如 "2026-10-14 09:39:55"） */
   reportTime: string;
-  /** 數據源標識（weathercn_realtime / mock），卡片以此區分即時 / 模擬 */
-  source: 'weathercn_realtime' | 'mock';
+  /** 數據源標識（amap_realtime / mock），卡片以此區分即時 / 模擬 */
+  source: 'amap_realtime' | 'mock';
 }
 
 export const meta = {
@@ -80,9 +80,9 @@ export const meta = {
           temperature: { type: 'string', description: '溫度（攝氏度）' },
           humidity: { type: 'string', description: '濕度（%）' },
           windDirection: { type: 'string', description: '風向' },
-          windPower: { type: 'string', description: '風速（如 12 km/h）' },
+          windPower: { type: 'string', description: '風力等級（如 ≤3）' },
           reportTime: { type: 'string', description: '數據發布時間' },
-          source: { type: 'string', description: 'weathercn_realtime / mock' },
+          source: { type: 'string', description: 'amap_realtime / mock' },
         },
       },
       idempotent: true,
@@ -177,7 +177,7 @@ async function invokeGetWeather(
     { sessionId: ctx.sessionId },
   );
   if (res.code === 0 && res.data) return { success: true, data: res.data };
-  // 雲端不可用（負數碼）或 WEATHERCN_KEY 未配置 / 上游失敗（業務 503，見
+  // 雲端不可用（負數碼）或 AMAP_KEY 未配置 / 上游失敗（業務 503，見
   // skill-weather.ts）→ mock 降級：天氣為只讀查詢無副作用，卡片標識
   // 「模擬數據」明示，保證本地演示與自動化驗證鏈路完整
   if (res.code < 0 || res.code === 503) {

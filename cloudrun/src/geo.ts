@@ -1,8 +1,10 @@
 /**
- * 逆地理編碼端點（高德 / 天地圖 geocoder 代理）
+ * 地理編碼端點（高德 / 天地圖 geocoder 代理：逆向座標→城市、正向地址→座標）
  *
  * 端點（與小程序端 services/geo.ts 呼叫路徑逐字對齊）：
  *   POST /api/geo/reverse   body: { lat, lng }（gcj02 座標）
+ *   POST /api/geo/geocode   body: { address }（2026-10-14 新增：地址簿默認收貨
+ *     地址作 POI 查詢中心等場景；僅高德上游，見 callAmapGeo 註釋）
  *
  * 為什麼需要此端點：wx.getLocation 成功回應不含 city 欄位（官方僅返回
  * latitude / longitude / accuracy 等），userProfile.location.city 須經逆
@@ -349,6 +351,152 @@ async function lookupReverse(lat: number, lng: number): Promise<ReverseCacheEntr
   return reverseCache.get(cacheKey) ?? null;
 }
 
+/**
+ * 正向地理編碼（地址 → gcj02 座標；2026-10-14 新增）
+ *
+ * 動機：地址簿默認收貨地址只存文本（無座標），「我家附近的便利店」
+ * （POI search_poi 以家為中心）需要先把家地址解析成座標。
+ *
+ * 僅接入高德 geo v3 單上游：天地圖正向 geocoder（query 形態）契約未經
+ * 實測核對，寧缺毋濫（與本檔「實測逐欄位核對」紀律一致）；僅配
+ * TIANDITU_KEY 環境下正向編碼不可用，由 handler 翻譯為業務 503。
+ */
+
+/** 正向編碼快取條目（快取 key = 去空白地址原文） */
+interface GeocodeCacheEntry {
+  lat: number;
+  lng: number;
+  /** 市級城市（直轄市回退 province，與 regeo 鏈路語義對齊） */
+  city?: string;
+  province?: string;
+  /** 上游格式化完整地址（出參透傳，供排查） */
+  formatted?: string;
+  /** 解析精度級別（門址 / 興趣點 / 區縣 / 城市…；粗精度中心點會有偏移） */
+  level?: string;
+  expireAt: number;
+}
+
+/** 地址 → 座標快取（TTL / 上限與 reverse 快取一致；地址變動低頻） */
+const geocodeCache = new Map<string, GeocodeCacheEntry>();
+
+/** 高德 geo 回應（僅聲明消費欄位） */
+interface AmapGeoResp {
+  /** '1' 成功 / '0' 失敗（info 帶原因） */
+  status?: string;
+  info?: string;
+  /** 命中條數（字串形態；'0' = 地址無法識別） */
+  count?: string;
+  geocodes?: unknown;
+}
+
+/**
+ * 呼叫高德正向地理編碼（geo v3）
+ *
+ * GET https://restapi.amap.com/v3/geocode/geo?address=…&key=金鑰
+ *   - status='1' 且 geocodes 非空：location = "lng,lat"（原生 gcj02，無需轉換）
+ *   - status='1' 但 geocodes 空：地址無法識別（零結果，屬業務正常形態）
+ *   - 直轄市 city 為空陣列 []（窄化歸 undefined 後回退 province）
+ *
+ * @returns 解析結果；零結果 / 金鑰未配置 / 網路失敗 / 業務失敗時返回 null
+ */
+async function callAmapGeo(address: string): Promise<Omit<GeocodeCacheEntry, 'expireAt'> | null> {
+  const key = process.env.AMAP_KEY;
+  if (!key) return null; // 金鑰未配置：由 handler 統一翻譯為業務 503
+
+  const url = `https://restapi.amap.com/v3/geocode/geo?address=${encodeURIComponent(address)}&key=${key}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+  try {
+    const resp = await fetch(url, { signal: controller.signal });
+    if (!resp.ok) {
+      console.error(`[geo] 高德正向編碼回應 HTTP ${resp.status}`);
+      return null;
+    }
+    const body = (await resp.json().catch(() => null)) as AmapGeoResp | null;
+    if (!body || body.status !== '1') {
+      console.error(`[geo] 高德正向編碼業務失敗：status=${body?.status} ${body?.info ?? ''}`);
+      return null;
+    }
+    const first = Array.isArray(body.geocodes) ? body.geocodes[0] : undefined;
+    if (!first || typeof first !== 'object') return null; // 零結果：地址無法識別
+    const g = first as Record<string, unknown>;
+    const locStr = strOrUndef(g.location);
+    if (!locStr) return null;
+    const [lngStr, latStr] = locStr.split(',');
+    const lat = Number(latStr);
+    const lng = Number(lngStr);
+    if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+    const province = strOrUndef(g.province);
+    const city = strOrUndef(g.city) ?? province; // 直轄市 [] → undefined → 回退 province
+    return {
+      lat: Number(lat.toFixed(6)),
+      lng: Number(lng.toFixed(6)),
+      ...(city ? { city } : {}),
+      ...(province ? { province } : {}),
+      ...(strOrUndef(g.formatted_address) ? { formatted: strOrUndef(g.formatted_address) } : {}),
+      ...(strOrUndef(g.level) ? { level: strOrUndef(g.level) } : {}),
+    };
+  } catch (e) {
+    console.error('[geo] 高德正向編碼不可達：', e instanceof Error ? e.message : e);
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * 正向編碼快取查詢 + 未命中回源
+ *
+ * 導出供 skill-map.ts（POI 地址中心模式）同進程直調，免 HTTP 自環。
+ * 零結果不寫快取（地址補全後重試應再回源）；TTL / 淘汰與 lookupReverse 同構。
+ *
+ * @returns 解析結果（含快取元資料 expireAt，消費方按需挑欄位）；未解析 / 失敗返回 null
+ */
+export async function geocodeAddress(address: string): Promise<GeocodeCacheEntry | null> {
+  const cacheKey = address.replace(/\s+/g, '');
+  const hit = geocodeCache.get(cacheKey);
+  if (hit && Date.now() < hit.expireAt) {
+    return hit;
+  }
+  const resolved = await callAmapGeo(cacheKey);
+  if (!resolved) return null;
+  const entry: GeocodeCacheEntry = { ...resolved, expireAt: Date.now() + CACHE_TTL_MS };
+  geocodeCache.set(cacheKey, entry);
+  if (geocodeCache.size > CACHE_MAX_ENTRIES) {
+    const oldest = geocodeCache.keys().next().value;
+    if (oldest !== undefined) geocodeCache.delete(oldest);
+  }
+  return entry;
+}
+
+/** 正向地理編碼入參 */
+interface GeocodeInput {
+  address?: unknown;
+}
+
+const handleGeocode: RouteHandler = async (body) => {
+  const input = (body ?? {}) as GeocodeInput;
+  const address = typeof input.address === 'string' ? input.address.trim() : '';
+  if (!address || address.length > 150) {
+    return badRequest('address 必填（非空，≤ 150 字）');
+  }
+  const entry = await geocodeAddress(address);
+  if (!entry) {
+    if (!process.env.AMAP_KEY) {
+      return fail(503, '未配置 AMAP_KEY，正向地理編碼不可用');
+    }
+    return fail(503, '地址無法識別或地理編碼上游失敗');
+  }
+  return ok({
+    lat: entry.lat,
+    lng: entry.lng,
+    city: entry.city,
+    province: entry.province,
+    formatted: entry.formatted,
+    level: entry.level,
+  });
+};
+
 /** 逆地理編碼入參 */
 interface ReverseInput {
   lat?: unknown;
@@ -380,4 +528,5 @@ const handleReverse: RouteHandler = async (body) => {
 
 export const geoRoutes: Array<[string, RouteHandler]> = [
   ['POST /api/geo/reverse', handleReverse],
+  ['POST /api/geo/geocode', handleGeocode],
 ];

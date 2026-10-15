@@ -7,11 +7,15 @@
  *   POST /api/skill/skill.train.12306/book_ticket/cancel
  *   POST /api/skill/skill.train.12306/book_ticket/complete
  *
- * 資料來源（分層降級，端點協議不變）：
- *   1. 真實數據：MCP_12306_URL 已配置時，經 12306-mcp（Joooook/12306-MCP，
- *      本地 .mcp/12306 目錄，埠 3001）查詢 12306 官方實時餘票與票價；
- *      下單金額亦取當日該車次該席別的真實票價
- *   2. 確定性模擬：未配置 MCP / 連線層失敗（不可達、超時）時降級，同一
+ * 資料來源（三層降級，端點協議不變；2026-10-14 修訂）:
+ *   1. 真實數據（優先）：VARIFLIGHT_API_KEY 已配置時，經飛常準 Tripmatch MCP
+ *      （ai.variflight.com，JSON-RPC streamable HTTP，searchTrainTickets）
+ *      查 12306 官方實時車次 / 余票 / 票價——免本地子進程，生產容器友好，
+ *      與機票域（skill-flight）共用同一 Key；下單金額同源核實
+ *   2. 真實數據（輔助）：MCP_12306_URL 已配置時，經 12306-mcp（Joooook/
+ *      12306-MCP，本地 .mcp/12306 目錄，埠 3001）查詢——免積分，本地
+ *      開發驗證用；Tripmatch 連線層失敗（超時 / 5xx / 解析異常）時回落
+ *   3. 確定性模擬：兩者皆不可用（未配置 / 連線層失敗）時降級，同一
  *      入參恆得同一結果，保證離線演示可用
  *   注意：上游工具的業務性錯誤（站名不存在、無此線路）如實透傳為業務
  *   失敗（HTTP 200 + 非 0 code），**不**降級模擬——避免對不存在的線路
@@ -68,13 +72,192 @@ interface McpTicket {
   prices?: Array<{ seat_name?: string; short?: string; num?: string; price?: number }>;
 }
 
-/** 協議席別枚舉 → 中文席別關鍵字（用於在 prices 陣列中定位目標席別） */
+/** 協議席別枚舉 → 中文席別關鍵字（用於在 prices 陣列中定位目標席別）
+ *  兩數據源席別名實測一致（商務座 / 一等座 / 優選一等座 / 二等座 / 無座…） */
 const SEAT_TYPE_TO_NAMES: Record<string, string[]> = {
   business: ['商務座', '特等座'],
   first_class: ['一等座', '優選一等座'],
   second_class: ['二等座', '二等包座'],
   hard_seat: ['硬座', '軟座', '無座'],
 };
+
+/* ==================== 飛常準 Tripmatch 數據源（2026-10-14 新增） ==================== */
+
+/** Tripmatch MCP 服務端點（streamable HTTP，協議 2025-03-26，無狀態 JSON 回應） */
+const TRIPMATCH_URL = 'https://ai.variflight.com/servers/tripmatch/mcp';
+
+/** 上游單次工具調用超時上限約 30s（官方文檔），此處對齊 */
+const VF_TRAIN_TIMEOUT_MS = 32_000;
+
+/** 業務性錯誤（站名不支援 / Key 餘額問題 / Error executing tool）：呼叫方應如實透傳 */
+class VfTrainToolError extends Error {}
+
+/**
+ * 經 Tripmatch MCP 呼叫火車票工具並解析為車次陣列
+ *
+ * 回應為三層包裝（2026-10-14 實測）：
+ *   JSON-RPC {result:{content:[{text}]}} → text 為「Train tickets: {...}」
+ *   → 內層 12306 官方風格 {code:200, data:{code:0, msg:'ok', data:[車次]}}
+ * 防禦點：① text 可能是 Python 風格單引號 dict（非合法 JSON）；② 站名
+ * 存在內嵌空格臟數據（如「北 京南」）；③ 工具失敗以「Error executing
+ * tool」開頭文本返回而非協議級錯誤（官方文檔明示）
+ *
+ * @throws VfTrainToolError 上游業務性錯誤（含 4xx 配置類），呼叫方應如實透傳
+ * @throws Error           連線層失敗（不可達 / 超時 / 5xx / 結構異常），呼叫方應回落 12306-mcp
+ */
+async function vfTrainCall(
+  key: string,
+  tool: string,
+  args: Record<string, unknown>,
+): Promise<VfTrainTicket[]> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), VF_TRAIN_TIMEOUT_MS);
+  let resp: Response;
+  try {
+    resp = await fetch(TRIPMATCH_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'X-API-Key': key,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: tool, arguments: args },
+      }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    throw new Error(`Tripmatch 端點不可達：${e instanceof Error ? e.message : String(e)}`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!resp.ok) {
+    const bodyText = await resp.text().catch(() => '');
+    // 401/403（Key 無效 / 餘額不足）為配置性業務錯誤：透傳；5xx 視為連線層失敗回落
+    if (resp.status >= 500) throw new Error(`Tripmatch HTTP ${resp.status}`);
+    throw new VfTrainToolError(`Tripmatch HTTP ${resp.status}：${bodyText.slice(0, 120)}`);
+  }
+  const rpc = (await resp.json().catch(() => {
+    throw new Error('Tripmatch 回應非合法 JSON-RPC');
+  })) as { result?: { content?: Array<{ type?: string; text?: string }> } };
+  const text = rpc.result?.content?.[0]?.text ?? '';
+  if (!text) throw new Error('Tripmatch 回應缺少 content 文本');
+  if (text.startsWith('Error executing tool')) {
+    throw new VfTrainToolError(`Tripmatch 業務失敗：${text.slice(0, 160)}`);
+  }
+  // 剝離前綴標籤（「Train tickets: 」等），先試原文 parse（容忍將來上游
+  // 改為合法 JSON），失敗再以單引號→雙引號轉換重試（中文站名場景安全）
+  const payloadText = text.slice(Math.max(0, text.indexOf('{')));
+  let payload: unknown;
+  try {
+    payload = JSON.parse(payloadText);
+  } catch {
+    try {
+      payload = JSON.parse(payloadText.replace(/'/g, '"'));
+    } catch {
+      throw new VfTrainToolError(`Tripmatch 回應無法解析：${text.slice(0, 120)}`);
+    }
+  }
+  const p = payload as {
+    code?: unknown; message?: unknown;
+    data?: { code?: unknown; msg?: unknown; data?: unknown };
+  };
+  if (p.code !== 200 || !p.data || p.data.code !== 0) {
+    throw new VfTrainToolError(`Tripmatch 業務失敗：${String(p.data?.msg ?? p.message ?? '未知錯誤').slice(0, 160)}`);
+  }
+  if (!Array.isArray(p.data.data)) throw new Error('Tripmatch 車次回應缺少 data.data 陣列');
+  return p.data.data as VfTrainTicket[];
+}
+
+/** Tripmatch searchTrainTickets 單條車次記錄（僅聲明用到的欄位） */
+interface VfTrainTicket {
+  trainNumber?: string;
+  fromStation?: string;
+  toStation?: string;
+  fromTime?: string;
+  toTime?: string;
+  useTime?: number; // 歷時分鐘數（區別於 12306-mcp 的 lishi hh:mm）
+  seatLists?: Array<{ seatName?: string; seatPrice?: number; ticketLeft?: number }>;
+}
+
+/** Tripmatch 席別選取（余票為直接數字，區別於 12306-mcp 的「有/無」文案） */
+function pickSeatVf(
+  seatLists: VfTrainTicket['seatLists'],
+  seatType: string,
+): { name: string; priceCent: number; remain: number } | null {
+  if (!Array.isArray(seatLists) || seatLists.length === 0) return null;
+  const wanted = SEAT_TYPE_TO_NAMES[seatType] ?? SEAT_TYPE_TO_NAMES.second_class;
+  const fallbackNames = SEAT_TYPE_TO_NAMES.second_class;
+  const hit =
+    seatLists.find((s) => wanted.includes(s.seatName ?? '')) ??
+    seatLists.find((s) => fallbackNames.includes(s.seatName ?? '')) ??
+    seatLists[0];
+  return {
+    name: hit.seatName ?? '未知席別',
+    priceCent: Math.round((hit.seatPrice ?? 0) * 100),
+    remain: typeof hit.ticketLeft === 'number' ? hit.ticketLeft : 0,
+  };
+}
+
+/** 站名臟數據清洗（實測存在「北 京南」內嵌空格形態） */
+function cleanStationName(s: string | undefined): string {
+  return (s ?? '').replace(/\s+/g, '');
+}
+
+/**
+ * 經 Tripmatch 查詢真實車次（協議輸出與 searchViaMcp 同構）
+ *
+ * @throws VfTrainToolError 上游業務性錯誤，呼叫方應如實透傳
+ * @throws Error           連線層失敗，呼叫方應回落 12306-mcp
+ */
+async function searchViaTripmatch(
+  key: string,
+  input: { from: string; to: string; date: string; seatType: string; highSpeedOnly?: boolean },
+): Promise<{
+  from: string;
+  to: string;
+  date: string;
+  trains: Array<Record<string, unknown>>;
+  source: 'tripmatch_realtime';
+}> {
+  // 官方契約：from_city / to_city 為中文城市名（Tripmatch 內部解析為電報碼）
+  const raw = await vfTrainCall(key, 'searchTrainTickets', {
+    from_city: input.from,
+    to_city: input.to,
+    date: input.date,
+  });
+
+  const trains = raw
+    .filter((t) => typeof t.trainNumber === 'string' && t.trainNumber)
+    // 高鐵過濾：上游無 trainFilterFlags 參數，本地按車次號前綴過濾
+    .filter((t) => (input.highSpeedOnly ? (t.trainNumber as string).startsWith('G') : true))
+    .slice(0, 8) // 摘要式返回，與 searchViaMcp 的 limitedNum 語義對齊
+    .map((t) => {
+      const seat = pickSeatVf(t.seatLists, input.seatType);
+      return {
+        trainNo: t.trainNumber as string,
+        from: cleanStationName(t.fromStation) || input.from,
+        to: cleanStationName(t.toStation) || input.to,
+        departTime: t.fromTime ?? '',
+        arriveTime: t.toTime ?? '',
+        durationMin: typeof t.useTime === 'number' ? t.useTime : 0,
+        seatType: input.seatType,
+        priceCent: seat?.priceCent ?? 0,
+        ticketsLeft: seat?.remain ?? 0,
+        // 附全席別明細（協議 outputSchema 僅要求 trainNo/priceCent，擴充欄位向後兼容）
+        seatClasses: (t.seatLists ?? []).map((s) => ({
+          name: s.seatName ?? '',
+          priceCent: Math.round((s.seatPrice ?? 0) * 100),
+          remain: typeof s.ticketLeft === 'number' ? s.ticketLeft : 0,
+        })),
+      };
+    });
+
+  return { from: input.from, to: input.to, date: input.date, trains, source: 'tripmatch_realtime' };
+}
 
 
 /** MCP 餘票描述 → 數字餘票（「有」=充裕取 9999；無/候補/-- = 0） */
@@ -175,7 +358,7 @@ async function searchViaMcp(
   return { from: input.from, to: input.to, date: input.date, trains, source: '12306_realtime' };
 }
 
-const handleSearch: RouteHandler = async (body) => {
+export const handleSearch: RouteHandler = async (body) => {
   const input = (body ?? {}) as SearchTrainInput;
   if (!input.from || !input.to || !input.date) {
     return badRequest('from / to / date 必填');
@@ -186,7 +369,29 @@ const handleSearch: RouteHandler = async (body) => {
 
   const seatType = input.seatType ?? 'second_class';
 
-  // 資料源 1：12306-mcp 真實實時數據（MCP_12306_URL 已配置時）
+  // 資料源 1：飛常準 Tripmatch 真實實時數據（VARIFLIGHT_API_KEY 已配置時；2026-10-14）
+  const vfKey = process.env.VARIFLIGHT_API_KEY;
+  if (vfKey) {
+    try {
+      const real = await searchViaTripmatch(vfKey, {
+        from: input.from as string,
+        to: input.to as string,
+        date: input.date as string,
+        seatType,
+        highSpeedOnly: input.highSpeedOnly === true,
+      });
+      return ok(real);
+    } catch (e) {
+      if (e instanceof VfTrainToolError) {
+        // 上游業務錯誤（站名不支援 / Key 餘額問題）：如實透傳，不降級假數據
+        return fail(503, e.message.slice(0, 200));
+      }
+      // 連線層失敗（超時 / 5xx / 結構異常）：回落 12306-mcp，記日誌供排查
+      console.error('[skill-train] Tripmatch 查詢不可用，回落 12306-mcp：', e instanceof Error ? e.message : e);
+    }
+  }
+
+  // 資料源 2：12306-mcp 真實實時數據（MCP_12306_URL 已配置且進程在跑時）
   const mcpUrl = process.env.MCP_12306_URL;
   if (mcpUrl) {
     try {
@@ -209,7 +414,7 @@ const handleSearch: RouteHandler = async (body) => {
     }
   }
 
-  // 資料源 2：確定性模擬數據（未配置 MCP / 連線層失敗）
+  // 資料源 3：確定性模擬數據（兩者皆未配置 / 連線層失敗）
   const basePrice = SEAT_PRICE_CENT[seatType] ?? SEAT_PRICE_CENT.second_class;
 
   const trains = [1, 2, 3, 4, 5].map((i) => {
@@ -262,14 +467,34 @@ const handleBook: RouteHandler = async (body, ctx) => {
   }
 
   /*
-   * 下單金額優先取 12306 真實票價（與查詢展示一致，避免「查價 ¥626 / 下單 ¥553」
-   * 的金額不一致）：MCP 可用且 from/to 齊備時，查當日車次並精確匹配請求席別。
-   * 查不到（未配置 / 車次已消失 / 連線失敗 / 席別不存在）回退靜態價目表。
-   * 精確匹配不回退其他席別：訂單金額必須對應用戶確認的席別，不可「就近取」。
+   * 下單金額優先取真實票價（與查詢展示一致，避免「查價 ¥626 / 下單 ¥553」
+   * 的金額不一致）：Tripmatch（優先）或 12306-mcp 可用且 from/to 齊備時，
+   * 查當日車次並精確匹配請求席別。查不到（未配置 / 車次已消失 / 連線失敗 /
+   * 席別不存在）回退靜態價目表。精確匹配不回退其他席別：訂單金額必須
+   * 對應用戶確認的席別，不可「就近取」。
    */
   let amountCent = SEAT_PRICE_CENT[input.seatType] ?? SEAT_PRICE_CENT.second_class;
+  const vfBookKey = process.env.VARIFLIGHT_API_KEY;
   const mcpUrl = process.env.MCP_12306_URL;
-  if (mcpUrl && input.from && input.to) {
+  if (vfBookKey && input.from && input.to) {
+    try {
+      const raw = await vfTrainCall(vfBookKey, 'searchTrainTickets', {
+        from_city: input.from,
+        to_city: input.to,
+        date: input.date as string,
+      });
+      const target = raw.find((t) => t.trainNumber === input.trainNo);
+      const names = SEAT_TYPE_TO_NAMES[input.seatType as string] ?? SEAT_TYPE_TO_NAMES.second_class;
+      const hit = (target?.seatLists ?? []).find((s) => names.includes(s.seatName ?? ''));
+      if (hit && typeof hit.seatPrice === 'number' && hit.seatPrice > 0) {
+        amountCent = Math.round(hit.seatPrice * 100);
+      }
+    } catch (e) {
+      console.error('[skill-train] 下單真實票價查詢（Tripmatch）失敗，回落 12306-mcp / 靜態價目表：', e instanceof Error ? e.message : e);
+    }
+  }
+  if (amountCent === (SEAT_PRICE_CENT[input.seatType] ?? SEAT_PRICE_CENT.second_class)
+    && mcpUrl && input.from && input.to) {
     try {
       const text = await callMcpTool(mcpUrl, 'get-tickets', {
         date: input.date as string,

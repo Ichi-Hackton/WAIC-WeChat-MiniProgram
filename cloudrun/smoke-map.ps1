@@ -1,9 +1,9 @@
 ﻿# 地圖 POI 搜尋 SKILL 端點冒煙測試（skill.map.tianditu / search_poi）
-# 斷言口徑（雲端三上游：高德優先、騰訊位置服務次之、天地圖兜底）：入參校驗 400 家族；
-# 三把金鑰（AMAP_KEY / TENCENT_LBS_KEY / TIANDITU_KEY）均未配置 → 業務 503（HTTP 200，
-# 小程序端以確定性模擬數據降級）；任一可用 → code=0 + pois 結構（name/lat/
-# lng/distanceM 齊備，distanceM 由雲端 haversine 後置計算；source 標識
-# 實際回源：amap / tencent_lbs / tianditu）。
+# 斷言口徑（雲端雙上游：高德優先、天地圖兜底；2026-10-14 騰訊上游移除）：
+# 入參校驗 400 家族；兩把金鑰（AMAP_KEY / TIANDITU_KEY）均未配置 → 業務 503（HTTP
+# 200，小程序端以確定性模擬數據降級）；任一可用 → code=0 + pois 結構（name/
+# lat/lng/distanceM 齊備，distanceM 由雲端 haversine 後置計算；source 標識
+# 實際回源：amap / tianditu）。
 # 服務位址：跟隨 $env:PORT（與 dev-start.ps1 預設 8787 一致），可覆寫
 $h = "http://127.0.0.1:$(if ($env:PORT) { $env:PORT } else { 8787 })"
 
@@ -32,9 +32,9 @@ $res = Send-Json "$h/api/skill/skill.map.tianditu/search_poi" '{"keyword":"便�
 $res | ConvertTo-Json -Depth 6 -Compress
 if ($res.code -eq 0) {
   $first = $res.data.pois | Select-Object -First 1
-  if (@('amap', 'tencent_lbs', 'tianditu') -contains $res.data.source -and $first -and $first.name -and $first.lat -and $first.distanceM) {
+  if (@('amap', 'tianditu') -contains $res.data.source -and $first -and $first.name -and $first.lat -and $first.distanceM) {
     "ASSERT OK: code=0 source=$($res.data.source) pois=$($res.data.pois.Count) 首條距離 $($first.distanceM)m"
   } else { 'ASSERT FAIL: pois 結構異常' }
 } elseif ($res.code -eq 503) {
-  "ASSERT OK: 三把金鑰均未配置業務 503（小程序端降級模擬數據）：$($res.message)"
+  "ASSERT OK: 兩把金鑰均未配置業務 503（小程序端降級模擬數據）：$($res.message)"
 } else { "ASSERT FAIL: 意外狀態碼 $($res.code)" }

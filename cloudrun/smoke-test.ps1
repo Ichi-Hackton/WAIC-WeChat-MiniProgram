@@ -51,5 +51,5 @@ if ($flight.data.status -eq 'pending_external' -and $flight.data.jump.target -eq
 '--- 9. 咖啡下單 ---'
 (Send-Json "$h/api/skill/skill.coffee.starbucks/place_order" $ownerHeaders '{"storeId":"sb_001","pickupType":"in_store","items":[{"sku":"latte","name":"拿鐵","quantity":2}]}') | ConvertTo-Json -Depth 5 -Compress
 
-'--- 10. 天氣查詢（上海座標；WEATHERCN_KEY 未配置時業務 503，配置後為中國天氣網實況）---'
+'--- 10. 天氣查詢（上海座標；AMAP_KEY 未配置時業務 503，配置後為高德實時實況）---'
 (Send-Json "$h/api/skill/skill.weather.query/get_weather" $null '{"lat":31.2304,"lng":121.4737}') | ConvertTo-Json -Depth 3 -Compress

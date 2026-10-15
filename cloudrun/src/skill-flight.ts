@@ -75,11 +75,13 @@ const CITY_IATA: Record<string, string> = {
   麗江: 'LJG', 丽江: 'LJG', 大理: 'DLU', 張家界: 'DYX', 张家界: 'DYX',
 };
 
-/** 協議艙位枚舉 → 中文關鍵字（用於在上游艙位陣列中定位目標艙位） */
+/** 協議艙位枚舉 → 中文關鍵字（用於在上游艙位陣列中定位目標艙位）
+ * 2026-10-14 實測修訂：上游 classname 業務艙慣例為「公务舱」，歸入 business；
+ * first 僅保留「頭等」（cabinclass F 業務慣例）*/
 const CABIN_TO_NAMES: Record<string, string[]> = {
   economy: ['經濟', '经济'],
-  business: ['商務', '商务'],
-  first: ['頭等', '头等', '公務', '公务'],
+  business: ['商務', '商务', '公務', '公务'],
+  first: ['頭等', '头等'],
 };
 
 /** 模擬價目基準（分）：與艙位枚舉對齊 */
@@ -135,10 +137,23 @@ async function vfCall(
   } catch {
     throw new VfTransportError('飛常準回應非合法 JSON');
   }
-  // 防禦式業務錯誤識別（上游錯誤形態未實測，覆蓋 error 物件與非零 code 兩種慣例）
-  const b = body as { error?: unknown; code?: unknown; message?: unknown };
-  if (b && typeof b === 'object' && (b.error !== undefined || (typeof b.code === 'number' && b.code !== 0))) {
-    throw new VfToolError(`飛常準業務失敗：${String(b.message ?? JSON.stringify(b.error ?? b.code)).slice(0, 160)}`);
+  // 防禦式業務錯誤識別（2026-10-14 實測契約修訂：外層 code 為 HTTP 風格，
+  // 200=成功（含 data 內業務錯誤場景）；業務層錯誤藏在 data.error_code /
+  // data.error（如 error_code 12「出發城市或目的城市无机场」），成功時
+  // data 為負載數組 / 物件且無 error_code）
+  const b = body as {
+    code?: unknown; message?: unknown;
+    data?: { error_code?: unknown; error?: unknown } | unknown[];
+  };
+  if (b && typeof b === 'object') {
+    if (typeof b.code === 'number' && b.code !== 200) {
+      throw new VfToolError(`飛常準業務失敗：${String(b.message ?? b.code).slice(0, 160)}`);
+    }
+    const d = b.data;
+    if (d && typeof d === 'object' && !Array.isArray(d)
+      && d.error_code !== undefined && d.error_code !== '' && Number(d.error_code) !== 0) {
+      throw new VfToolError(`飛常準業務失敗：${String(d.error ?? `error_code ${String(d.error_code)}`).slice(0, 160)}`);
+    }
   }
   return body;
 }
@@ -205,7 +220,8 @@ function pickPriceCent(
     // 目標艙位優先，取不到再取最低價（上游 price_mode=lowest 語義）
     let fallback = -1;
     for (const raw of list as Array<Record<string, unknown>>) {
-      const name = String(raw.name ?? raw.cabin_name ?? raw.seat_name ?? '');
+      // 2026-10-14 實測：票價端點艙位名欄位為 classname（小駝峰風格）
+      const name = String(raw.classname ?? raw.name ?? raw.cabin_name ?? raw.seat_name ?? '');
       const cent = toCent(raw.price ?? raw.adult_price ?? raw.min_price);
       if (cent < 0) continue;
       if (wanted.some((w) => name.includes(w))) return cent;
@@ -258,12 +274,14 @@ const handleSearch: RouteHandler = async (body) => {
       if (!Array.isArray(sched)) throw new VfTransportError('飛常準航班回應缺少 data 陣列');
 
       // 票價按航班號建索引（FlightNo → 原始記錄）， tolerate 大小寫差異
+      // （2026-10-14 實測：票價端點航班號欄位為小寫 flightno）
       const priceByFlight = new Map<string, Record<string, unknown>>();
       if (priceRes.status === 'fulfilled') {
         const prices = (priceRes.value as { data?: unknown }).data;
         if (Array.isArray(prices)) {
           for (const p of prices as Array<Record<string, unknown>>) {
-            const no = typeof p.FlightNo === 'string' ? p.FlightNo.toUpperCase() : '';
+            const noRaw = p.flightno ?? p.FlightNo;
+            const no = typeof noRaw === 'string' ? noRaw.toUpperCase() : '';
             if (no && !priceByFlight.has(no)) priceByFlight.set(no, p);
           }
         }
@@ -371,8 +389,12 @@ const handleBook: RouteHandler = async (body, ctx) => {
       });
       const list = (raw as { data?: unknown }).data;
       if (Array.isArray(list)) {
+        // 2026-10-14 實測：票價端點航班號欄位為小寫 flightno（與查詢索引同構）
         const target = (list as Array<Record<string, unknown>>).find(
-          (p) => typeof p.FlightNo === 'string' && p.FlightNo.toUpperCase() === input.flightNo?.toUpperCase(),
+          (p) => {
+            const noRaw = p.flightno ?? p.FlightNo;
+            return typeof noRaw === 'string' && noRaw.toUpperCase() === input.flightNo?.toUpperCase();
+          },
         );
         const cent = pickPriceCent(target, input.flightNo, input.cabin);
         if (cent > 0) amountCent = cent;

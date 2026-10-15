@@ -4,10 +4,14 @@
  * 端點（與小程序端 map-tianditu SKILL 呼叫路徑逐字對齊）：
  *   POST /api/skill/skill.map.tianditu/search_poi
  *   body: { keyword, lat, lng, radiusM?, limit? }（lat/lng 為 gcj02 座標）
+ *         或 { keyword, address, radiusM?, limit? }（2026-10-14 新增地址中心
+ *         模式：address 為文本地址〔如地址簿默認收貨地址〕，先經 geo.ts
+ *         正向編碼解析成座標再查——「我家附近的便利店」以家為中心，
+ *         與定位座標模式互斥優先：兩者兼有時座標優先、address 僅備援）
  *
- * 三上游可切換（2026-10-14 修訂：用戶取得高德 Web 服務金鑰，高德升為優先
- * 上游——座標系原生 gcj02 零轉換、半徑原生支援；騰訊次之、天地圖兜底，
- * 三把金鑰誰配了用誰；2026-10-13 騰訊 / 天地圖背景見各上游段）：
+ * 雙上游可切換（2026-10-14 修訂：地理鏈路統一高德金鑰，騰訊上游整體
+ * 移除——高德為優先上游（座標系原生 gcj02 零轉換、半徑原生支援），
+ * 天地圖兜底，兩把金鑰誰配了用誰；2026-10-13 天地圖背景見其上游段）：
  *
  *   上游 A（優先）高德 Web 服務「周邊搜索」（AMAP_KEY，與 /api/geo/reverse
  *     的 regeo 共用「Web服務」金鑰）——
@@ -19,19 +23,7 @@
  *     原生 gcj02；address / tel 缺失形態為空陣列 []（typeof 窄化歸
  *     undefined，address 再以 pname+adname 拼接兜底）；offset 單頁上限 25。
  *
- *   上游 B（次選）騰訊位置服務 WebServiceAPI（TENCENT_LBS_KEY）——
- *     GET https://apis.map.qq.com/ws/place/v1/search
- *       ?keyword=…&boundary=nearby(lat,lng,1000,auto_extend=1)&page_size=20&key=…
- *     契約要點（官方文檔 + 2026-10-13 實測）：status 0 成功（非 0 帶
- *     message，如 199「此key未開啟WebserviceAPI功能」、311 key 格式錯誤）；
- *     data[] 每項 { title, address, tel?, location: {lat,lng}, _distance? }；
- *     座標系原生 gcj02（與小程序全鏈路一致，零轉換）；boundary=nearby
- *     半徑上限 1000 米為上游約束，auto_extend=1 允許自動擴大召回——
- *     「附近」語義仍由本端 haversine 按 radiusM 後置把關，不依賴上游。
- *     優勢：微信生態同源（map 組件底層即騰訊位置服務）、控制台境外可達
- *     （lbs.qq.com）、個人開發者地點搜索免費額度約 1 萬次 / 日。
- *
- *   上游 C（兜底）天地圖「地名搜索 2.0」（TIANDITU_KEY，與 /api/geo/reverse
+ *   上游 B（兜底）天地圖「地名搜索 2.0」（TIANDITU_KEY，與 /api/geo/reverse
  *     共用「服務端」金鑰；v1 /search 已下線）——
  *     GET https://api.tianditu.gov.cn/v2/search?postStr={…}&type=query&tk=…
  *     契約要點（2026-10-13 實測逐欄位核對）：status 為物件 { cndesc,
@@ -43,7 +35,7 @@
  * 不論上游：距離語義全部由本端 haversine 後置計算（過濾 radiusM 內 + 升序
  * + 截取 limit），正確性不依賴任何上游過濾行為，兩條上游出參同構。
  *
- * 三把金鑰均未配置或上游失敗時返回業務失敗 code 503（HTTP 200，不觸發
+ * 兩把金鑰均未配置或上游失敗時返回業務失敗 code 503（HTTP 200，不觸發
  * 小程序端網路層重試），小程序端 SKILL 以確定性模擬數據降級（卡片標識
  * 「模擬數據」，與天氣 SKILL 同構）。
  *
@@ -54,7 +46,7 @@
 
 import type { RouteHandler } from './api';
 import { ok, fail, badRequest } from './api';
-import { gcj02ToWgs84, wgs84ToGcj02 } from './geo';
+import { gcj02ToWgs84, wgs84ToGcj02, geocodeAddress } from './geo';
 
 /** POI 快取 TTL：10 分鐘（門店級數據變動低頻） */
 const POI_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -101,7 +93,7 @@ export interface PoiItem {
 }
 
 /** 回源上游標識（出參透傳，小程序端卡片以 source !== 'mock' 區分真實 / 模擬） */
-export type PoiSource = 'amap' | 'tencent_lbs' | 'tianditu';
+export type PoiSource = 'amap' | 'tianditu';
 
 /** POI 快取條目（統一出參主體；keyword / radiusM 由入參回顯不參與快取） */
 interface PoiCacheEntry {
@@ -256,77 +248,6 @@ async function callAmapAround(
   }
 }
 
-/** 騰訊位置服務地點搜索回應（僅聲明消費欄位） */
-interface TencentSearchResp {
-  /** 0 成功；非 0 帶 message（199 / 311 / 110 等，見檔頭上游 A 契約要點） */
-  status?: unknown;
-  message?: unknown;
-  data?: unknown;
-}
-
-/**
- * 呼叫騰訊位置服務地點搜索（座標原生 gcj02，零轉換——上游 A，見檔頭）
- *
- * boundary=nearby 半徑上限 1000 米為上游約束，固定 auto_extend=1 讓上游
- * 自動擴大召回；嚴格半徑語義由 lookupPois 的 haversine 後置過濾把關。
- * page_size 上限 20，與天地圖 UPSTREAM_COUNT=30 同量級。
- *
- * @returns 全部原始 POI（未過濾未排序，distanceM 佔位）；上游失敗返回 null
- */
-async function callTencentSearch(
-  keyword: string,
-  lat: number,
-  lng: number,
-  key: string,
-): Promise<PoiItem[] | null> {
-  const url =
-    `https://apis.map.qq.com/ws/place/v1/search?keyword=${encodeURIComponent(keyword)}` +
-    `&boundary=nearby(${lat.toFixed(6)},${lng.toFixed(6)},1000,auto_extend=1)` +
-    `&page_size=20&key=${key}`;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
-  try {
-    const resp = await fetch(url, { signal: controller.signal });
-    if (!resp.ok) {
-      console.error(`[map] 騰訊位置服務回應 HTTP ${resp.status}`);
-      return null;
-    }
-    const body = (await resp.json().catch(() => null)) as TencentSearchResp | null;
-    if (!body || body.status !== 0) {
-      const msg = typeof body?.message === 'string' ? body.message : '';
-      console.error(`[map] 騰訊位置服務業務失敗：status=${body?.status} ${msg}`);
-      return null;
-    }
-    if (!Array.isArray(body.data)) return []; // 業務正常但零結果：空陣列語義
-    // 防禦性逐項窄化：location 座標或 title 缺失的髒數據直接丟棄
-    const items: PoiItem[] = [];
-    for (const raw of body.data) {
-      if (!raw || typeof raw !== 'object') continue;
-      const p = raw as Record<string, unknown>;
-      const title = strOrUndef(p.title);
-      const loc = p.location as { lat?: unknown; lng?: unknown } | undefined;
-      if (!title || !loc || typeof loc.lat !== 'number' || typeof loc.lng !== 'number') {
-        continue;
-      }
-      items.push({
-        name: title,
-        address: strOrUndef(p.address) ?? '',
-        phone: strOrUndef(p.tel),
-        // 原生 gcj02，無需座標轉換（與天地圖鏈路的雙道轉換對比見檔頭）
-        lat: Number(loc.lat.toFixed(6)),
-        lng: Number(loc.lng.toFixed(6)),
-        distanceM: 0, // 佔位，lookupPois 按中心統一 haversine 計算
-      });
-    }
-    return items;
-  } catch (e) {
-    console.error('[map] 騰訊位置服務不可達：', e instanceof Error ? e.message : e);
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /**
  * 呼叫天地圖 v2 搜索（queryCenter 座標為 wgs84）
  *
@@ -435,13 +356,12 @@ async function lookupPois(
     };
   }
 
-  // 三上游選擇（見檔頭）：高德優先；未配置或調用失敗依序回落騰訊、天地圖
+  // 雙上游選擇（見檔頭）：高德優先；未配置或調用失敗回落天地圖
   // ——「失敗」僅指請求 / 業務錯（null），零結果（[]）為正常語義不觸發回落。
-  // 三把金鑰皆無則交由 handler 統一翻譯為業務 503
+  // 兩把金鑰皆無則交由 handler 統一翻譯為業務 503
   const amapKey = process.env.AMAP_KEY;
-  const tencentKey = process.env.TENCENT_LBS_KEY;
   const tdtKey = process.env.TIANDITU_KEY;
-  if (!amapKey && !tencentKey && !tdtKey) return null;
+  if (!amapKey && !tdtKey) return null;
 
   let source: PoiSource = 'tianditu';
   let raw: PoiItem[] | null = null;
@@ -449,12 +369,8 @@ async function lookupPois(
     raw = await callAmapAround(keyword, lat, lng, amapKey);
     if (raw) source = 'amap';
   }
-  if (!raw && tencentKey) {
-    raw = await callTencentSearch(keyword, lat, lng, tencentKey);
-    if (raw) source = 'tencent_lbs';
-  }
   if (!raw && tdtKey) {
-    // 入參 gcj02 → wgs84（天地圖座標系，見檔頭上游 C 契約要點）
+    // 入參 gcj02 → wgs84（天地圖座標系，見檔頭上游 B 契約要點）
     const wgs = gcj02ToWgs84(lat, lng);
     raw = await callTiandituSearch(keyword, wgs.lat, wgs.lng, radiusM, tdtKey);
   }
@@ -480,6 +396,8 @@ interface PoiInput {
   keyword?: unknown;
   lat?: unknown;
   lng?: unknown;
+  /** 查詢中心文本地址（地址中心模式；與 lat/lng 至少提供其一） */
+  address?: unknown;
   radiusM?: unknown;
   limit?: unknown;
 }
@@ -490,9 +408,26 @@ const handleSearchPoi: RouteHandler = async (body) => {
   if (typeof keyword !== 'string' || !keyword.trim() || keyword.trim().length > 20) {
     return badRequest('keyword 必填（非空，≤ 20 字）');
   }
-  const { lat, lng } = input;
-  if (typeof lat !== 'number' || typeof lng !== 'number' || Number.isNaN(lat) || Number.isNaN(lng)) {
-    return badRequest('lat / lng 必填且為數字');
+  let lat: number | undefined =
+    typeof input.lat === 'number' && !Number.isNaN(input.lat) ? input.lat : undefined;
+  let lng: number | undefined =
+    typeof input.lng === 'number' && !Number.isNaN(input.lng) ? input.lng : undefined;
+  const address = typeof input.address === 'string' ? input.address.trim() : '';
+  if (address.length > 150) {
+    return badRequest('address 過長（≤ 150 字）');
+  }
+  if (lat === undefined || lng === undefined) {
+    if (!address) {
+      return badRequest('lat / lng 與 address 至少提供其一（座標為數字 / 地址 1~150 字）');
+    }
+    // 地址中心模式：正向編碼解析座標後續統一 POI 鏈路。失敗統一業務 503——
+    // 小程序端地址模式不做 mock 降級（假位置誤導，見 map-tianditu SKILL）
+    const geo = await geocodeAddress(address);
+    if (!geo) {
+      return fail(503, '查詢中心地址無法識別（地址不準確或地理編碼上游不可用）');
+    }
+    lat = geo.lat;
+    lng = geo.lng;
   }
   // gcj02 僅定義於中國大陸境內（粗邊界），與 /api/geo/reverse 一致
   if (lat < 3 || lat > 54 || lng < 73 || lng > 136) {
@@ -512,8 +447,8 @@ const handleSearchPoi: RouteHandler = async (body) => {
 
   const result = await lookupPois(keyword.trim(), lat, lng, radiusM, limit);
   if (!result) {
-    if (!process.env.AMAP_KEY && !process.env.TENCENT_LBS_KEY && !process.env.TIANDITU_KEY) {
-      return fail(503, '未配置 AMAP_KEY / TENCENT_LBS_KEY / TIANDITU_KEY，POI 搜尋不可用');
+    if (!process.env.AMAP_KEY && !process.env.TIANDITU_KEY) {
+      return fail(503, '未配置 AMAP_KEY / TIANDITU_KEY，POI 搜尋不可用');
     }
     return fail(503, 'POI 搜尋上游失敗（服務不可達或業務錯誤）');
   }
