@@ -31,7 +31,7 @@ export interface JumpTarget {
  */
 export type JumpTargetKey =
   | 'train_12306' | 'ota_flight' | 'jd' | 'meituan' | 'taobao'
-  | 'starbucks' | 'damai' | 'none';
+  | 'starbucks' | 'damai' | 'luckin' | 'fliggy' | 'none';
 
 /**
  * 預設目標表（EXTERNAL_JUMP 未配置 / 部分配置時的兜底）
@@ -50,6 +50,13 @@ const DEFAULT_TARGETS: Record<JumpTargetKey, JumpTarget> = {
   // 真機查證後經 EXTERNAL_JUMP 覆蓋（可帶 path 直達點單 / 演出頁）
   starbucks: { appId: '' },
   damai: { appId: '' },
+  // 瑞幸官方小程序 appId 未經公開管道確證，留空 = copy-only；
+  // 真機查證後經 EXTERNAL_JUMP 覆蓋（2026-10-14 並行接入新增）
+  luckin: { appId: '' },
+  // 飛豬小程序 appId 未經公開管道確證，留空 = copy-only（搜索結果的
+  // detailUrl 為 H5 鏈接，小程序側無法直接打開，複製需求單由用戶自行
+  // 在飛豬 App 完成）；真機查證後經 EXTERNAL_JUMP 覆蓋（2026-10-14 接入）
+  fliggy: { appId: '' },
   // 演示商品 / 無渠道兜底：僅複製清單，不跳轉
   none: { appId: '' },
 };

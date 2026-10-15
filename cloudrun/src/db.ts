@@ -24,10 +24,13 @@ import { createPool, type Pool, type RowDataPacket, type ResultSetHeader } from 
  * 訂單業務域：train=火車票 flight=機票 shop=購物訂單 shop_cart=購物車明細
  * booking=生活預約 trip=行程分享（2026-10 評審 #4） metrics=埋點上報（#5）
  * coffee=星巴克點單 ticket=演出票務（2026-10 六域回補上架）
+ * mcd=麥當勞點餐（2026-10-14 新增：首個真實下單域，訂單在麥當勞側真實創建）
+ * luckin=瑞幸咖啡 ride=滴滴叫車（2026-10-14 並行接入新增，對應 skill-luckin / skill-didi）
+ * monitor=條件監控（2026-10 第二梯隊·項A：餘票準常駐監控，命中即完成）
  */
 export type OrderDomain =
   | 'train' | 'flight' | 'shop' | 'shop_cart' | 'booking' | 'trip' | 'metrics'
-  | 'coffee' | 'ticket';
+  | 'coffee' | 'ticket' | 'mcd' | 'luckin' | 'ride' | 'monitor';
 
 /**
  * 訂單狀態：
@@ -128,6 +131,16 @@ function logDegraded(reason: string): void {
   if (degradedLogged) return;
   degradedLogged = true;
   console.error(`[db] ${reason}`);
+}
+
+/**
+ * 對外唯讀連線池視圖（動態技能存儲層 skill-dynamic-store.ts 共用）
+ *
+ * 注意：呼叫方必須先 await initDb() 再取池；池為 null 表示記憶體降級。
+ * 此導出不改變訂單 DAO 的降級語義。
+ */
+export function getDbPool(): Pool | null {
+  return pool;
 }
 
 /** DAO 進入前確保初始化已結束（冪等） */
@@ -238,6 +251,52 @@ export async function deleteOrder(orderId: string, owner: string): Promise<Mutat
   if (res.affectedRows > 0) return 'ok';
   const [rows] = await pool.query<RowDataPacket[]>('SELECT owner FROM external_orders WHERE order_id = ?', [orderId]);
   return rows.length > 0 ? 'forbidden' : 'not_found';
+}
+
+/**
+ * 覆寫 payload（條件監控 tick 專用：更新 lastCheckedAt / hit 等掃描狀態；
+ * 僅供服務端內部調用，無 owner 鑒權——路由層不暴露本函數，調用方為
+ * monitors.ts 的 CRON_TOKEN 鑒權端點）
+ */
+export async function updateOrderPayload(
+  orderId: string,
+  payload: Record<string, unknown>,
+): Promise<'ok' | 'not_found'> {
+  await ensureReady();
+  if (!pool) {
+    const order = memoryOrders.get(orderId);
+    if (!order) return 'not_found';
+    order.payload = payload;
+    return 'ok';
+  }
+  const [res] = await pool.execute<ResultSetHeader>(
+    'UPDATE external_orders SET payload = ? WHERE order_id = ?',
+    [JSON.stringify(payload), orderId],
+  );
+  return res.affectedRows > 0 ? 'ok' : 'not_found';
+}
+
+/**
+ * 列出某域全部記錄（不限 owner；條件監控 tick 掃描專用——同上僅限服務端
+ * 內部調用，定時掃描無用戶身份，歸屬鑒權在命中推送時以 owner 定向）
+ */
+export async function listAllByDomain(domain: OrderDomain, statuses?: OrderStatus[]): Promise<ExternalOrder[]> {
+  await ensureReady();
+  if (!pool) {
+    return Array.from(memoryOrders.values())
+      .filter((o) => o.domain === domain && (!statuses || statuses.includes(o.status)))
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+  const statusFilter = statuses?.length
+    ? ` AND status IN (${statuses.map(() => '?').join(',')})`
+    : '';
+  const params: unknown[] = [domain, ...statuses ?? []];
+  const [rows] = await pool.query<RowDataPacket[]>(
+    `SELECT order_id, owner, domain, status, payload, created_at FROM external_orders
+     WHERE domain = ?${statusFilter} ORDER BY created_at DESC LIMIT 500`,
+    params,
+  );
+  return rows.map(rowToOrder);
 }
 
 /** 列出某用戶某域的訂單（新→舊；可過濾狀態） */

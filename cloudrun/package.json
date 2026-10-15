@@ -6,15 +6,18 @@
   "scripts": {
     "build": "tsc -p .",
     "start": "node dist/server.js",
-    "type-check": "tsc -p . --noEmit"
+    "type-check": "tsc -p . --noEmit",
+    "test:dynamic": "npm run build && node --test test/skill-dynamic.test.mjs"
   },
   "license": "UNLICENSED",
   "dependencies": {
     "12306-mcp": "0.3.10",
-    "mysql2": "^3.11.0"
+    "mysql2": "^3.11.0",
+    "nodemailer": "^6.9.16"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/nodemailer": "^8.0.2",
     "typescript": "^7.0.2"
   }
 }
