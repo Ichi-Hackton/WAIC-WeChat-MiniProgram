@@ -10,3 +10,4 @@ export * from './identity';
 export * from './metrics';
 export * from './trip-share';
 export * from './jump';
+export * from './device';

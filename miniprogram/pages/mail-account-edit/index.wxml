@@ -1,0 +1,75 @@
+<view class="page">
+  <!-- ═══ 授權碼申請指引（常駐，用戶最大卡點：授權碼 ≠ 登入密碼；不綁定特定郵箱服務商）═══ -->
+  <view class="guide-hint">
+    授權碼在你的郵箱網頁版設置中開啟「SMTP 服務」後生成，非郵箱登入密碼，具體開通方式請查閱你的郵箱服務商說明。授權碼僅加密存於本機，發送時經雲托管加密通道透傳，不上傳留存。
+  </view>
+
+  <!-- ═══ 帳戶表單卡（白卡 + hairline 分隔，與地址表單同族）═══ -->
+  <view class="form-card">
+
+    <!-- 郵箱地址 -->
+    <view class="field-row">
+      <text class="field-label">郵箱地址</text>
+      <input
+        class="field-input"
+        value="{{email}}"
+        bindinput="onEmailInput"
+        placeholder="你的發件郵箱地址"
+        placeholder-class="field-placeholder"
+        maxlength="50"
+      />
+    </view>
+
+    <!-- SMTP 授權碼 -->
+    <view class="field-row">
+      <text class="field-label">SMTP 授權碼</text>
+      <input
+        class="field-input"
+        value="{{authCode}}"
+        bindinput="onAuthCodeInput"
+        password
+        placeholder="{{editing ? '留空表示沿用原授權碼' : '郵箱設置中生成的授權碼'}}"
+        placeholder-class="field-placeholder"
+        maxlength="64"
+      />
+    </view>
+
+    <!-- SMTP 服務器（自動推斷，可手改） -->
+    <view class="field-row">
+      <text class="field-label">SMTP 服務器</text>
+      <input
+        class="field-input"
+        value="{{smtpHost}}"
+        bindinput="onHostInput"
+        placeholder="按郵箱自動帶入，可手動修改"
+        placeholder-class="field-placeholder"
+        maxlength="100"
+      />
+    </view>
+
+    <!-- SMTP 端口 -->
+    <view class="field-row field-row-last">
+      <text class="field-label">端口</text>
+      <input
+        class="field-input"
+        value="{{smtpPort}}"
+        bindinput="onPortInput"
+        type="number"
+        placeholder="465"
+        placeholder-class="field-placeholder"
+        maxlength="5"
+      />
+    </view>
+  </view>
+
+  <!-- ═══ 用途說明（綁定後 Agent 能力變化）═══ -->
+  <view class="usage-hint">
+    綁定後對 MicroMate 說「發郵件到 xx@xx.com 說……」，將直接以你的郵箱真實發出（未綁定時為複製內容引導手動發送）。
+  </view>
+
+  <!-- ═══ 保存（深褐實底，唯一主操作）═══ -->
+  <view class="save-btn" hover-class="btn-hover" bindtap="onTapSave">{{editing ? '保存修改' : '綁定並啟用'}}</view>
+
+  <!-- ═══ 解除綁定（僅編輯態；弱化紅字，破壞性操作前有 modal 確認）═══ -->
+  <view wx:if="{{editing}}" class="remove-btn" hover-class="btn-hover" bindtap="onTapUnbind">解除綁定</view>
+</view>
