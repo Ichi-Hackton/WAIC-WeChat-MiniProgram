@@ -316,20 +316,40 @@ const handlePlace: RouteHandler = async (body, ctx) => {
     if (!upstreamId) {
       return fail(502, '瑞幸下單回應缺少訂單號（回應結構異常）');
     }
-    await createOrder({
-      orderId,
-      owner: ctx.openid,
-      domain: 'luckin',
-      status: 'pending_external',
-      payload: {
-        upstreamOrderId: upstreamId,
-        deptId: input.deptId,
-        storeName: input.storeName ?? '',
-        items,
-        payOrderUrl: data.payOrderUrl ?? '',
-      },
-      createdAt: Date.now(),
-    });
+    // 落庫失敗補償（2026-10 審計 P1-2）：上游訂單已真實建立，本地寫入失敗時
+    // 必須補償取消上游，否則形成「瑞幸側有待支付訂單、本地無記錄」的孤行訂單
+    //（用戶失去取消入口，只能等逾期自動取消或去瑞幸 App 手動處理）
+    try {
+      await createOrder({
+        orderId,
+        owner: ctx.openid,
+        domain: 'luckin',
+        status: 'pending_external',
+        payload: {
+          upstreamOrderId: upstreamId,
+          deptId: input.deptId,
+          storeName: input.storeName ?? '',
+          items,
+          payOrderUrl: data.payOrderUrl ?? '',
+        },
+        createdAt: Date.now(),
+      });
+    } catch (dbErr) {
+      console.error('[skill-luckin] 落庫失敗，嘗試補償取消上游訂單：', dbErr instanceof Error ? dbErr.message : dbErr);
+      try {
+        await callMcpTool(LUCKIN_MCP_URL, TOOL_CANCEL_ORDER, { orderId: upstreamId }, LUCKIN_TIMEOUT_MS, auth);
+        return fail(503, '訂單落庫失敗，已自動取消上游瑞幸訂單，請重試下單');
+      } catch (cancelErr) {
+        // 補償也失敗（含業務性拒絕如已支付）：上游訂單極可能仍存活，拒絕靜默
+        // 吞掉，以 CRITICAL 級日誌留痕供人工核銷（真實交易嚴禁不明不白的單）
+        console.error(
+          '[skill-luckin][CRITICAL] 落庫與補償取消均失敗，上游訂單可能存活待支付：',
+          'upstreamOrderId=', upstreamId,
+          cancelErr instanceof Error ? cancelErr.message : cancelErr,
+        );
+        return fail(503, '訂單落庫與自動取消均失敗，請至瑞幸 App 核實訂單，勿重複下單');
+      }
+    }
     return ok({
       orderId,
       upstreamOrderId: upstreamId,
@@ -370,7 +390,10 @@ const handleCancel: RouteHandler = async (body, ctx) => {
       await callMcpTool(LUCKIN_MCP_URL, TOOL_CANCEL_ORDER, { orderId: upstreamId }, LUCKIN_TIMEOUT_MS, auth);
     } catch (e) {
       if (e instanceof McpToolError) return fail(503, e.message.slice(0, 200));
-      console.error('[skill-luckin] 瑞幸取消不可用，僅取消本地記錄：', e instanceof Error ? e.message : e);
+      // 連線層失敗（2026-10 審計 P2-3）：上游取消結果未知，保留本地記錄讓
+      // 用戶可重試取消；原「僅取消本地」會造成本地已刪而瑞幸訂單仍活躍
+      console.error('[skill-luckin] 瑞幸取消連線失敗，保留本地記錄待重試：', e instanceof Error ? e.message : e);
+      return fail(502, '瑞幸取消通道暫時不可用（連線失敗），請稍後重試；未支付訂單逾期會自動取消');
     }
   }
   const result = await cancelOrder(input.orderId, ctx.openid);

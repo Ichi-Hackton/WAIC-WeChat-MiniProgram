@@ -20,8 +20,8 @@
  */
 
 import type { RouteHandler } from './api';
-import { ok, badRequest, unauthorized, fail } from './api';
-import { createOrder, getOrder } from './db';
+import { ok, badRequest, unauthorized, forbidden, fail } from './api';
+import { createOrder, getOrder, deleteOrder } from './db';
 
 /** 白化時間線節點（僅展示三要素） */
 interface SharedNode {
@@ -71,6 +71,11 @@ function sanitize(input: unknown): SharedTrip | null {
   };
 }
 
+/** 分享有效期（毫秒）：行程分享的真實社交窗口以「天」計，超期即 404。
+ * 白化數據雖已剝敏，無限期駐留仍是不必要的暴露面（2026-10 審計 P3：
+ * 分享無過期 / 無撤銷；撤銷端點涉及前端交互改造另行排期，先以 TTL 收斂） */
+const SHARE_TTL_MS = 30 * 24 * 3600 * 1000;
+
 /** POST /api/trip/share —— 白化落庫，返回不可枚舉 shareId */
 const handleShare: RouteHandler = async (body, ctx) => {
   if (!ctx.openid) {
@@ -93,6 +98,29 @@ const handleShare: RouteHandler = async (body, ctx) => {
   return ok({ shareId });
 };
 
+/** POST /api/trip/share/revoke —— 發起方撤銷分享（2026-10 審計 P3 遺留項：
+ *  分享無撤銷。歸屬鑒權防 IDOR，刪除後同伴側立即 404——TTL 之外的顯式收回） */
+const handleRevoke: RouteHandler = async (body, ctx) => {
+  if (!ctx.openid) {
+    return unauthorized('缺少調用方身份（x-wx-openid），拒絕撤銷分享');
+  }
+  const input = (body ?? {}) as { shareId?: unknown };
+  const shareId = typeof input.shareId === 'string' ? input.shareId.trim().slice(0, 64) : '';
+  if (!shareId) return badRequest('shareId 必填');
+  const order = await getOrder(shareId);
+  if (!order || order.domain !== 'trip') {
+    return fail(404, '分享不存在或已失效');
+  }
+  // 歸屬前置鑒權（防 IDOR）：撤銷是破壞性操作，僅發起方可觸達自己的分享
+  if (order.owner !== ctx.openid) {
+    return forbidden('無權撤銷他人的分享');
+  }
+  const result = await deleteOrder(shareId, ctx.openid);
+  if (result === 'not_found') return fail(404, '分享不存在或已失效');
+  if (result === 'forbidden') return forbidden('無權撤銷他人的分享');
+  return ok({ ok: true, shareId });
+};
+
 /** POST /api/trip/shared —— 按 shareId 拉取只讀行程（同伴打開分享卡） */
 const handleFetch: RouteHandler = async (body) => {
   const input = (body ?? {}) as { shareId?: unknown };
@@ -101,6 +129,10 @@ const handleFetch: RouteHandler = async (body) => {
   const order = await getOrder(shareId);
   if (!order || order.domain !== 'trip') {
     return fail(404, '分享不存在或已失效');
+  }
+  // TTL 檢查：超期分享視同失效（發起方重新分享即可獲取新 shareId）
+  if (Date.now() - order.createdAt > SHARE_TTL_MS) {
+    return fail(404, '分享已過期（有效期 30 天），請讓發起方重新分享');
   }
   const trip = sanitize(order.payload.trip);
   if (!trip) {
@@ -111,5 +143,6 @@ const handleFetch: RouteHandler = async (body) => {
 
 export const tripShareRoutes: Array<[string, RouteHandler]> = [
   ['POST /api/trip/share', handleShare],
+  ['POST /api/trip/share/revoke', handleRevoke],
   ['POST /api/trip/shared', handleFetch],
 ];

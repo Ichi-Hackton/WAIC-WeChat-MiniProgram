@@ -17,8 +17,12 @@
  *     任一線索即通過（「10月20日到10月22日」往返兩程各自成立）
  *   - 車次統一大寫逐字比對（[GDCZK]＋1-4 位數字）
  *   - 到達城市以 ≥2 字公共子串判斷一致（容忍「杭州西湖」對「杭州」
- *     的尾綴截斷形態）；僅針對 to 欄位（火車 / 機票到達站——訂錯方向
- *     危害最大；city 欄位常來自定位而非意圖點名，誤傷率高，不比對）
+ *     的尾綴截斷形態）；針對 to 欄位（火車 / 機票到達站）與 toName
+ *     欄位（滴滴到達地，2026-10 審計 P3 遺留項補齊）——訂錯方向危害
+ *     最大；city 欄位常來自定位、from 類欄位常為定位反查地址，誤傷率
+ *     高，均不比對；餐飲域商品名無強證據提取錨點（無車次 / 航班號式
+ *     正則特徵），强行字面比對違反「寧可漏攔不可誤攔」憲章，明確
+ *     不做（由 checkpoint 複述 + 渠道側確認兜底）
  *
  * 本模組為純函數（規範 § 4：utils/ 不得 import wx），便於單元測試。
  */
@@ -126,9 +130,11 @@ function sharesTwoChar(a: string, b: string): boolean {
   return false;
 }
 
-/** 到達城市比對：任務 to 與意圖任一城市候選有 ≥2 字公共子串即通過 */
+/** 到達城市比對：任務 to（或 toName——滴滴域欄位形態）與意圖任一城市
+ *  候選有 ≥2 字公共子串即通過 */
 function reviewCity(intent: string, input: Record<string, unknown>): string | null {
-  const to = typeof input.to === 'string' ? input.to.trim() : '';
+  const to = (typeof input.to === 'string' ? input.to.trim()
+    : typeof input.toName === 'string' ? input.toName.trim() : '');
   if (to.length < 2) return null;
   const clues = cityClues(intent);
   if (clues.length === 0) return null;

@@ -139,7 +139,9 @@ export async function forgeDraft(
         { role: 'system', content: system },
         { role: 'user', content: user },
       ],
-      { temperature: 0.2, maxTokens: 900, jsonMode: true },
+      // openid 穿透發起者身份（CodeReview Medium #1）：鍛造的 LLM 消耗計入
+      // 發起用戶自身的配額桶，而非全服務共用單一合成桶被擠兌
+      { temperature: 0.2, maxTokens: 900, jsonMode: true, openid: ownerOpenid },
     );
     raw = result.text;
   } catch (e) {

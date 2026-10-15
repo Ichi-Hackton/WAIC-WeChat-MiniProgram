@@ -142,7 +142,13 @@ export function getMailAccount(): MailAccount | null {
 /** 是否已綁定（不觸發解密；列表展示用輕量探測） */
 export function hasMailAccount(): boolean {
   const raw = getItem<Partial<MailAccount>>(ACCOUNT_KEY);
-  return !!raw && typeof raw.email === 'string' && typeof raw.authCode === 'string';
+  // 與 getMailAccount 同口徑（2026-10 審計 P3）：authCode 必須是 v1: 密文
+  // 形態——歷史明文 / 損壞數據不得在列表展示為「已綁定」（點進去卻讀不出，
+  // 狀態自相矛盾）
+  return !!raw
+    && typeof raw.email === 'string'
+    && typeof raw.authCode === 'string'
+    && raw.authCode.startsWith('v1:');
 }
 
 /**

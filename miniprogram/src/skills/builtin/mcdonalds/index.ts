@@ -400,7 +400,9 @@ async function invokePlace(
     env,
     '/api/skill/skill.food.mcdonalds/place_mcd_order',
     input,
-    { sessionId },
+    // 寫操作禁用自動重試：服務端上游超時（20s）長於客戶端（15s），慢成功會被
+    // 判超時後重發造成重複真實訂單（雲端尚無 clientToken 冪等鍵；同 train invokeBook）
+    { sessionId, retry: false },
   );
   if (res.code === 0 && res.data) return { success: true, data: res.data };
   // 真實下單嚴禁降級 mock：雲基礎設施錯誤（code<0）同樣如實失敗——

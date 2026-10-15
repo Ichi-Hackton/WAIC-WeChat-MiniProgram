@@ -277,20 +277,40 @@ const handlePlace: RouteHandler = async (body, ctx) => {
     if (!s.orderId) {
       return fail(502, '滴滴下單回應缺少 orderId（structuredContent 異常）');
     }
-    await createOrder({
-      orderId,
-      owner: ctx.openid,
-      domain: 'ride',
-      status: 'pending_external',
-      payload: {
-        upstreamOrderId: s.orderId,
-        productCategory: input.productCategory,
-        productName: input.productName ?? '',
-        fromName: s.from?.name ?? input.fromName ?? '',
-        toName: s.to?.name ?? input.toName ?? '',
-      },
-      createdAt: Date.now(),
-    });
+    // 落庫失敗補償（2026-10 審計 P1-2）：上游叫車已真實受理，本地寫入失敗時
+    // 必須補償取消上游，否則形成「滴滴已派單、本地無記錄」的孤行訂單
+    //（用戶無從查單 / 取消，司機空跑並可能產生取消費爭議）
+    try {
+      await createOrder({
+        orderId,
+        owner: ctx.openid,
+        domain: 'ride',
+        status: 'pending_external',
+        payload: {
+          upstreamOrderId: s.orderId,
+          productCategory: input.productCategory,
+          productName: input.productName ?? '',
+          fromName: s.from?.name ?? input.fromName ?? '',
+          toName: s.to?.name ?? input.toName ?? '',
+        },
+        createdAt: Date.now(),
+      });
+    } catch (dbErr) {
+      console.error('[skill-didi] 落庫失敗，嘗試補償取消上游訂單：', dbErr instanceof Error ? dbErr.message : dbErr);
+      try {
+        await callMcpToolStructured(endpoint, 'taxi_cancel_order', { order_id: s.orderId }, DIDI_TIMEOUT_MS);
+        return fail(503, '訂單落庫失敗，已自動取消上游叫車，請重試下單');
+      } catch (cancelErr) {
+        // 補償也失敗（含 -32041 行程中不可取消等業務拒絕）：上游訂單極可能仍在
+        // 派單，以 CRITICAL 級日誌留痕供人工核銷，拒絕靜默吞掉
+        console.error(
+          '[skill-didi][CRITICAL] 落庫與補償取消均失敗，上游訂單可能仍在派單：',
+          'upstreamOrderId=', s.orderId,
+          cancelErr instanceof Error ? cancelErr.message : cancelErr,
+        );
+        return fail(503, '訂單落庫與自動取消均失敗，請立即查看滴滴 App 核實行程，勿重複叫車');
+      }
+    }
     return ok({
       orderId,
       upstreamOrderId: s.orderId,
@@ -424,7 +444,11 @@ const handleCancel: RouteHandler = async (body, ctx) => {
         // -32041 行程中不可取消等：如實透傳（rollback 由上層匯報失敗）
         return fail(503, e.message.slice(0, 200));
       }
-      console.error('[skill-didi] 滴滴取消不可用，僅取消本地記錄：', e instanceof Error ? e.message : e);
+      // 連線層失敗（2026-10 審計 P2-3）：上游行程可能仍在派單，保留本地記錄讓
+      // 用戶可重試取消；原「僅取消本地」會造成本地已刪而滴滴行程仍活躍
+      //（司機空跑 + 取消費爭議源），取消可安全重試故引導重試而非刪檔
+      console.error('[skill-didi] 滴滴取消連線失敗，保留本地記錄待重試：', e instanceof Error ? e.message : e);
+      return fail(502, '滴滴取消通道暫時不可用（連線失敗），行程狀態未知；請稍後重試取消，勿假設已取消');
     }
   }
   // 本地歸檔（歸屬鑒權內建於 cancelOrder，雙重防線——前置檢查已攔越權）

@@ -140,7 +140,10 @@ async function assertSmtpHostAllowed(host: string): Promise<void> {
 const handleSendMail: RouteHandler = async (body, ctx) => {
   const input = (body ?? {}) as SendMailInput;
   const to = sanitizeStr(input.to, 100);
-  const subject = sanitizeStr(input.subject, MAX_FIELD_CHARS);
+  // subject 剝 CRLF（2026-10 審計 P3）：郵件頭注入縱深防禦——主題攜帶
+  // 換行符理論上可偽造額外頭（如 BCC），nodemailer 新版雖會攔截，
+  // 顯式剝除不依賴第三方庫的內部實現；正文不剝（純文本換行無害）
+  const subject = sanitizeStr(input.subject, MAX_FIELD_CHARS).replace(/[\r\n]+/g, ' ');
   const text = sanitizeStr(input.body, MAX_FIELD_CHARS);
   if (!to || !EMAIL_RE.test(to)) {
     return badRequest('to 必須為合法郵箱地址（如 name@example.com）');

@@ -338,7 +338,9 @@ async function invokeCreate(env: string, input: CreateReservationInput, sessionI
     env,
     '/api/skill/skill.booking.center/create_reservation',
     input,
-    { sessionId },
+    // 寫操作禁用自動重試：逾時重試會重複建單（同 train invokeBook 防線；
+    // 跳轉域重複單僅為重複需求卡，但口徑與各域寫操作保持一致）
+    { sessionId, retry: false },
   );
   if (res.code === 0 && res.data) return { success: true, data: res.data };
   if (res.code < 0) {

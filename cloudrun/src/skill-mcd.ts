@@ -382,22 +382,43 @@ const handlePlaceOrder: RouteHandler = async (body, ctx) => {
       quantity: it.quantity,
     }));
     const takeWayLabel = (matched ?? takeWayList[0])?.title ?? takeWayCode;
-    await createOrder({
-      orderId,
-      owner: ctx.openid,
-      domain: 'mcd',
-      status: 'pending_external',
-      payload: {
-        mcdOrderId,
-        storeId: input.storeId,
-        items: detail,
-        amountCent,
-        takeWayCode,
-        takeWayLabel,
-        ...(payUrl ? { payUrl } : {}),
-      },
-      createdAt: Date.now(),
-    });
+    // 落庫失敗補償（2026-10 審計 P1-2）：上游訂單已真實建立（未支付），本地
+    // 寫入失敗時補償取消上游，避免「麥當勞側有訂單、本地無記錄」的孤行訂單
+    //（用戶失去查單 / 取消入口，支付鏈接也一併丟失）
+    try {
+      await createOrder({
+        orderId,
+        owner: ctx.openid,
+        domain: 'mcd',
+        status: 'pending_external',
+        payload: {
+          mcdOrderId,
+          storeId: input.storeId,
+          items: detail,
+          amountCent,
+          takeWayCode,
+          takeWayLabel,
+          ...(payUrl ? { payUrl } : {}),
+        },
+        createdAt: Date.now(),
+      });
+    } catch (dbErr) {
+      console.error('[skill-mcd] 落庫失敗，嘗試補償取消上游訂單：', dbErr instanceof Error ? dbErr.message : dbErr);
+      try {
+        // 原因碼 -1=其它（系統補償取消，非用戶意願變更，不用「改主意了」誤導上游報表）
+        await mcdCall('cancel-order', { orderId: mcdOrderId, cancelReasonCode: String(-1) });
+        return fail(503, '訂單落庫失敗，已自動取消上游麥當勞訂單，請重試下單');
+      } catch (cancelErr) {
+        // 補償也失敗（含已支付 / 已出餐等業務拒絕）：上游訂單極可能仍存活，
+        // 以 CRITICAL 級日誌留痕供人工核銷，拒絕靜默吞掉
+        console.error(
+          '[skill-mcd][CRITICAL] 落庫與補償取消均失敗，上游訂單可能存活：',
+          'mcdOrderId=', mcdOrderId,
+          cancelErr instanceof Error ? cancelErr.message : cancelErr,
+        );
+        return fail(503, '訂單落庫與自動取消均失敗，請至麥當勞 App 核實訂單，勿重複下單');
+      }
+    }
 
     return ok({
       orderId,

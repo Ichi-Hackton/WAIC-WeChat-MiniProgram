@@ -273,7 +273,9 @@ async function invokePlace(
     env,
     '/api/skill/skill.ride.didi/place_ride',
     input,
-    { sessionId },
+    // 寫操作禁用自動重試：逾時重試會重複叫車（雲端尚無 clientToken 冪等鍵）——
+    // 滴滴真實派單，重複訂單即重複接單司機（取消費爭議源）
+    { sessionId, retry: false },
   );
   if (res.code === 0 && res.data) return { success: true, data: res.data };
   if (res.code < 0) {

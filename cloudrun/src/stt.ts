@@ -25,6 +25,7 @@
 
 import type { RouteHandler } from './api';
 import { ok, badRequest, fail } from './api';
+import { checkQuota } from './quota';
 
 /** 上游 STT 呼叫逾時上限（毫秒）——短音頻識別通常 1~3s，留足餘量 */
 const UPSTREAM_TIMEOUT_MS = 30_000;
@@ -36,6 +37,12 @@ const UPSTREAM_TIMEOUT_MS = 30_000;
  * （正常 60s mp3@16kHz 單聲道實測 ≤500KB，遠低於此上限）
  */
 const MAX_AUDIO_BYTES = 700 * 1024;
+
+/** 每分鐘頻次上限（滑動窗口，2026-10 審計 P2-2）：語音輸入天然低頻，
+ * 身份 5 次 / 全局 60 次已覆蓋正常使用；音頻大小已有 MAX_AUDIO_BYTES
+ * 上限，此處補頻次維度（口徑與 llm-chat.ts 對齊：429 業務碼不被重試） */
+const STT_IDENTITY_LIMIT_PER_MIN = 5;
+const STT_GLOBAL_LIMIT_PER_MIN = 60;
 
 /** MiniMax asr 回應（僅聲明用到的欄位） */
 interface AsrResponse {
@@ -69,10 +76,19 @@ function resolveUpstream(): { url: string; apiKey: string } | { error: string } 
   return { error: 'STT 未配置：請設定 STT_BASE_URL 與 STT_API_KEY（或將 LLM 供應商配置為 MiniMax）' };
 }
 
-const handleRecognize: RouteHandler = async (body) => {
+const handleRecognize: RouteHandler = async (body, ctx) => {
   const upstream = resolveUpstream();
   if ('error' in upstream) {
     return upstreamFail(upstream.error);
+  }
+
+  // 頻次配額（P2-2）：身份桶（openid / IP）+ 全局桶（不依賴身份，鎖死總成本）
+  const identity = ctx.openid ?? `ip:${ctx.clientIp ?? 'unknown'}`;
+  if (
+    !checkQuota('stt', identity, STT_IDENTITY_LIMIT_PER_MIN, 60_000) ||
+    !checkQuota('stt', '__global__', STT_GLOBAL_LIMIT_PER_MIN, 60_000)
+  ) {
+    return fail(429, '語音識別請求過於頻繁，請稍後再試');
   }
 
   const req = (body ?? {}) as SttRequestBody;

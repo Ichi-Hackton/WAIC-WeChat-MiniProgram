@@ -23,6 +23,8 @@ export interface RequestContext {
   openid?: string;
   /** 小程序端附加的會話 ID（header: x-micromate-session） */
   sessionId?: string;
+  /** 客戶端來源 IP（x-forwarded-for 首位，回退 socket 位址；匿名請求的配額鍵用，2026-10 審計 P2-2） */
+  clientIp?: string;
 }
 
 /** 路由處理器回傳：HTTP 狀態碼 + 業務回應體 */

@@ -557,24 +557,35 @@ const handleCreateOrder: RouteHandler = async (body, ctx) => {
     `場館 ${located.bundle.event.venue}`,
     '以下單頁實際價格與票檔為準',
   ].join('\n');
-  await createOrder({
-    orderId,
-    owner: ctx.openid,
-    domain: 'ticket',
-    status: 'pending_external',
-    payload: {
-      eventId: located.bundle.event.eventId,
-      eventName: located.bundle.event.name,
-      sessionId: located.session.sessionId,
-      sessionDate: located.session.date,
-      startTime: located.session.startTime,
-      tierId: located.tier.tierId,
-      tierName: located.tier.name,
-      quantity,
-      amountCent,
-    },
-    createdAt: Date.now(),
-  });
+  try {
+    await createOrder({
+      orderId,
+      owner: ctx.openid,
+      domain: 'ticket',
+      status: 'pending_external',
+      payload: {
+        eventId: located.bundle.event.eventId,
+        eventName: located.bundle.event.name,
+        sessionId: located.session.sessionId,
+        sessionDate: located.session.date,
+        startTime: located.session.startTime,
+        tierId: located.tier.tierId,
+        tierName: located.tier.name,
+        quantity,
+        amountCent,
+      },
+      createdAt: Date.now(),
+    });
+  } catch (dbErr) {
+    // 庫存回滾（2026-10 審計 P3）：先扣後落庫，落庫失敗須回退本次扣減——
+    // 否則演示庫存被幽靈佔用，累積漂移會讓後續正常下單被 1002 誤拒。
+    // 跳轉域無上游真實訂單，回滾本地計數即完整補償
+    const tierKey = `${keys.sessionId}_${keys.tierNo}`;
+    const nowSold = soldByTier.get(tierKey) ?? quantity;
+    soldByTier.set(tierKey, Math.max(0, nowSold - quantity));
+    console.error('[skill-ticket] 落庫失敗，已回滾本次庫存扣減：', dbErr instanceof Error ? dbErr.message : dbErr);
+    return fail(503, '訂單落庫失敗，請稍後重試（庫存已回滾，不影響後續下單）');
+  }
 
   return ok({
     orderId,

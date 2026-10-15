@@ -39,21 +39,27 @@ export class DynamicRunError extends Error {
   }
 }
 
-/** 執行器外部依賴（測試注入點） */
+/** 執行器外部依賴（測試注入點）；llmChat 的 opts.openid 為真實調用方身份
+ *  （CodeReview Medium #1：穿透配額鍵用，避免全服務共用單一合成桶） */
 export interface ExecutorDeps {
   httpGet: (conn: HttpConnectorConfig, params: Record<string, string | number | boolean>) => Promise<{ status: number; json: unknown }>;
   mcpCall: (endpoint: string, tool: string, args: Record<string, unknown>, timeoutMs?: number) => Promise<string>;
-  llmChat: (messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, opts?: { temperature?: number; maxTokens?: number; jsonMode?: boolean }) => Promise<{ text: string }>;
+  llmChat: (messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, opts?: { temperature?: number; maxTokens?: number; jsonMode?: boolean; openid?: string }) => Promise<{ text: string }>;
 }
 
-/** 內部直呼 llm-chat（避免 HTTP 自轉發；與 counseling 直呼 handleChat 同款先例） */
+/** 內部直呼 llm-chat（避免 HTTP 自轉發；與 counseling 直呼 handleChat 同款先例）。
+ *  opts.openid 穿透真實調用方：動態技能的 LLM 消耗計入發起用戶自身的 llm
+ *  身份桶（與其直接調 /api/llm/chat 共享額度，語義一致）；僅無身份的防禦
+ *  性兜底回退 system.dynamic 合成鍵——handleChat 配額為 8 次/分，若全部
+ *  內部調用共用單一合成桶，≥16 個活躍用戶即互相擠兌 429（動態技能自身
+ *  配額 30 次/時 ≪ 單用戶桶上限，穿透後正常使用不受影響） */
 async function defaultLlmChat(
   messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-  opts?: { temperature?: number; maxTokens?: number; jsonMode?: boolean },
+  opts?: { temperature?: number; maxTokens?: number; jsonMode?: boolean; openid?: string },
 ): Promise<{ text: string }> {
   const result = await handleChat(
     { messages, temperature: opts?.temperature, maxTokens: opts?.maxTokens, jsonMode: opts?.jsonMode },
-    { openid: 'system.dynamic', sessionId: 'system.dynamic' },
+    { openid: opts?.openid ?? 'system.dynamic', sessionId: 'system.dynamic' },
   );
   if (result.body.code !== 0 || !result.body.data || typeof result.body.data !== 'object') {
     throw new DynamicRunError('llm_unavailable', '文本生成服務暫不可用');
@@ -173,7 +179,7 @@ function mapHttpError(e: HttpFetchError): DynamicRunError {
 export async function runDynamic(
   record: DynamicSkillRecord,
   input: unknown,
-  _ctx: RequestContext,
+  ctx: RequestContext,
 ): Promise<DynamicRunData> {
   if (record.status !== 'approved') {
     throw new DynamicRunError('skill_not_active', '該技能未處於已上架狀態');
@@ -246,7 +252,7 @@ export async function runDynamic(
             { role: 'system', content: system },
             { role: 'user', content: user },
           ],
-          { temperature: 0.4, maxTokens: 800 },
+          { temperature: 0.4, maxTokens: 800, openid: ctx.openid },
         );
       } catch (e) {
         if (e instanceof DynamicRunError) throw e;

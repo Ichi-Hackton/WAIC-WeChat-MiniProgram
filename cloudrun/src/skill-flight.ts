@@ -28,6 +28,7 @@
 
 import type { RouteHandler } from './api';
 import { ok, fail, badRequest, unauthorized, forbidden } from './api';
+import { checkQuota } from './quota';
 import { createOrder, getOrder, cancelOrder, completeOrder } from './db';
 import { buildJump } from './external-jump';
 
@@ -239,7 +240,8 @@ const CABIN_LABEL: Record<string, string> = {
   first: '頭等艙',
 };
 
-const handleSearch: RouteHandler = async (body) => {
+// 導出供 monitors 復用（機票降價監控的查詢鏈，與 skill-train handleSearch 導出模式對齊）
+export const handleSearch: RouteHandler = async (body, ctx) => {
   const input = (body ?? {}) as SearchFlightsInput;
   if (!input.from || !input.to || !input.date) {
     return badRequest('from / to / date 必填');
@@ -247,6 +249,17 @@ const handleSearch: RouteHandler = async (body) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) {
     return badRequest('date 格式必須為 YYYY-MM-DD');
   }
+
+  // 查詢配額（2026-10 審計 P2 遺留項）：飛常準為付費配額，此前無頻次限制。
+  // 與 skill-train 共用 'vf-search' 域（同一把 VARIFLIGHT_API_KEY 總量封頂）
+  const identity = ctx.openid ?? `ip:${ctx.clientIp ?? 'unknown'}`;
+  if (
+    !checkQuota('vf-search', identity, 12, 60_000) ||
+    !checkQuota('vf-search', '__global__', 240, 60_000)
+  ) {
+    return fail(429, '查詢過於頻繁，請稍後再試');
+  }
+
   const cabin = input.cabin ?? 'economy';
   if (!(cabin in CABIN_TO_NAMES)) {
     return badRequest('cabin 必須為 economy / business / first');

@@ -36,9 +36,28 @@ export function getByPath(obj: unknown, path: string): unknown {
   return cur;
 }
 
-/** 設定深層值（用於 inputBindings 反向注入） */
+/** 原型污染防護：禁止作為路徑段的危險鍵（2026-10 審計 P2-1）
+ *
+ * 攻擊面：inputBindings 的 paramName 來自 LLM 規劃輸出（可被 prompt
+ * injection 誘導），攜帶 "__proto__.x" 形態的鍵時，setByPath 中間段
+ * 讀取 cur['__proto__'] 會拿到 Object.prototype 並往下寫入，造成進程內
+ * 全局原型污染（已隔離驗證復現）。此處單點攔截，覆蓋全部現有與未來
+ * 調用方（binding.applyBindings 等）。
+ */
+const FORBIDDEN_PATH_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** 設定深層值（用於 inputBindings 反向注入）
+ *
+ * @throws 路徑任一段命中危險鍵時拋錯（呼叫方將其轉譯為任務級失敗，
+ *         與 applyBindings 取值失敗的 BINDING_FAILED 語義一致）
+ */
 export function setByPath(obj: Record<string, unknown>, path: string, value: unknown): void {
   const parts = path.split('.');
+  for (const part of parts) {
+    if (FORBIDDEN_PATH_SEGMENTS.has(part)) {
+      throw new Error(`不安全的路徑段「${part}」：拒絕寫入（原型污染防護）`);
+    }
+  }
   let cur: Record<string, unknown> = obj;
   for (let i = 0; i < parts.length - 1; i++) {
     const key = parts[i];

@@ -17,7 +17,8 @@
  */
 
 import type { RouteHandler } from './api';
-import { ok, badRequest } from './api';
+import { ok, badRequest, fail } from './api';
+import { checkQuota } from './quota';
 
 /** OpenAI 相容 chat 請求體（僅聲明本代理用到的欄位） */
 interface ChatCompletionRequest {
@@ -50,6 +51,17 @@ function upstreamFail(message: string): { httpStatus: number; body: { code: numb
 
 /** 上游 LLM 呼叫逾時上限（毫秒） */
 const UPSTREAM_TIMEOUT_MS = 30_000;
+
+/** 輸入上限（2026-10 審計 P2-2）：規劃場景實際量級為數千字元（可用技能
+ * 清單 + 用戶意圖），留一個數量級餘量；超限即 400——無上限時公網調用者
+ * 可塞滿 1MB body 直送上游，按 token 計費的金繸會被瞬間燒穿 */
+const MAX_MESSAGES = 40;
+const MAX_MESSAGE_CHARS = 16_000;
+const MAX_TOTAL_CHARS = 64_000;
+
+/** 每分鐘頻次上限（滑動窗口）：身份桶（openid / IP）+ 端點全局桶 */
+const LLM_IDENTITY_LIMIT_PER_MIN = 8;
+const LLM_GLOBAL_LIMIT_PER_MIN = 120;
 
 /** 固定預設模型（LLM_MODEL 未設定時兜底；模型由雲端唯一決定，請求不可覆蓋） */
 const DEFAULT_LLM_MODEL = 'MiniMax-M3';
@@ -97,7 +109,7 @@ const handleConfig: RouteHandler = async () => {
  * 匯出供同服務 SKILL 端點復用（如 skill-counseling 以自有 System Prompt
  * 構造 messages 後直呼，避免多一跳 HTTP 自轉發）；亦直接註冊於 llmRoutes。
  */
-export const handleChat: RouteHandler = async (body) => {
+export const handleChat: RouteHandler = async (body, ctx) => {
   const baseUrl = process.env.LLM_BASE_URL;
   const apiKey = process.env.LLM_API_KEY;
   if (!baseUrl || !apiKey) {
@@ -105,14 +117,40 @@ export const handleChat: RouteHandler = async (body) => {
     return upstreamFail('LLM 代理未配置：請在雲托管環境變數設定 LLM_BASE_URL 與 LLM_API_KEY');
   }
 
+  // 頻次配額（2026-10 審計 P2-2）：LLM 是全服務最貴入口，此前無任何頻次
+  // 限制。身份桶優先 openid——counseling 直呼透傳真實 ctx，dynamic-executor
+  // 經 opts.openid 穿透發起用戶（無身份時回退 system.dynamic 合成鍵），外部
+  // 請求缺省回退 clientIp；全局桶不依賴身份——公網直連者偽造任意 openid
+  // 也繞不過端點總量封頂。429 走業務碼（HTTP 200），與上游 429 翻 503 的
+  // 「可重試」語義相反：本地限流被觸發時重試只會繼續撞牆，不應被小程序端
+  // 重試放大。
+  const identity = ctx.openid ?? `ip:${ctx.clientIp ?? 'unknown'}`;
+  if (
+    !checkQuota('llm', identity, LLM_IDENTITY_LIMIT_PER_MIN, 60_000) ||
+    !checkQuota('llm', '__global__', LLM_GLOBAL_LIMIT_PER_MIN, 60_000)
+  ) {
+    return fail(429, 'LLM 調用過於頻繁，請稍後再試');
+  }
+
   const req = (body ?? {}) as LLMRequestBody;
   if (!Array.isArray(req.messages) || req.messages.length === 0) {
     return badRequest('messages 必填且不可為空');
   }
+  if (req.messages.length > MAX_MESSAGES) {
+    return badRequest(`messages 過多（${req.messages.length} 條，上限 ${MAX_MESSAGES} 條）`);
+  }
+  let totalChars = 0;
   for (const m of req.messages) {
     if (typeof m.role !== 'string' || typeof m.content !== 'string') {
       return badRequest('messages[].role / content 必須為字串');
     }
+    if (m.content.length > MAX_MESSAGE_CHARS) {
+      return badRequest(`單條消息過長（${m.content.length} 字元，上限 ${MAX_MESSAGE_CHARS}）`);
+    }
+    totalChars += m.content.length;
+  }
+  if (totalChars > MAX_TOTAL_CHARS) {
+    return badRequest(`消息總長度過大（${totalChars} 字元，上限 ${MAX_TOTAL_CHARS}）`);
   }
 
   const payload: ChatCompletionRequest = {

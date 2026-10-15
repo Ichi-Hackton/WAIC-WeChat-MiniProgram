@@ -29,6 +29,7 @@
 
 import type { RouteHandler } from './api';
 import { ok, fail, badRequest, unauthorized, forbidden } from './api';
+import { checkQuota } from './quota';
 import { callMcpTool, McpToolError } from './mcp-client';
 import { createOrder, getOrder, cancelOrder, completeOrder } from './db';
 import { buildJump } from './external-jump';
@@ -358,13 +359,25 @@ async function searchViaMcp(
   return { from: input.from, to: input.to, date: input.date, trains, source: '12306_realtime' };
 }
 
-export const handleSearch: RouteHandler = async (body) => {
+export const handleSearch: RouteHandler = async (body, ctx) => {
   const input = (body ?? {}) as SearchTrainInput;
   if (!input.from || !input.to || !input.date) {
     return badRequest('from / to / date 必填');
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.date)) {
     return badRequest('date 格式必須為 YYYY-MM-DD');
+  }
+
+  // 查詢配額（2026-10 審計 P2 遺留項）：Tripmatch 為付費配額（VARIFLIGHT_API_KEY），
+  // 此前無身份無頻次限制，公網直連可無限刷。與 llm/stt 同款雙層桶；train 與
+  // flight 共用 'vf-search' 域——同一把付費鑰匙的總量封頂。monitors tick 以
+  // owner 身份傳入（每用戶 ≤5 條監控 + 10 分鐘節流，遠低於個人桶上限）
+  const identity = ctx.openid ?? `ip:${ctx.clientIp ?? 'unknown'}`;
+  if (
+    !checkQuota('vf-search', identity, 12, 60_000) ||
+    !checkQuota('vf-search', '__global__', 240, 60_000)
+  ) {
+    return fail(429, '查詢過於頻繁，請稍後再試');
   }
 
   const seatType = input.seatType ?? 'second_class';

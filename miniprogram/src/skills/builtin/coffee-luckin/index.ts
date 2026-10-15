@@ -304,7 +304,9 @@ async function invokePlace(
     env,
     '/api/skill/skill.coffee.luckin/place_luckin_order',
     input,
-    { sessionId },
+    // 寫操作禁用自動重試：逾時重試會重複下單（雲端尚無 clientToken 冪等鍵；
+    // 訂單掛本人瑞幸賬號，重複訂單即重複佔用優惠券權益）
+    { sessionId, retry: false },
   );
   if (res.code === 0 && res.data) return { success: true, data: res.data };
   // 雲基礎設施不可用（code<0）：本地生成 copy-only 跳轉卡（與雲端降級同構——
