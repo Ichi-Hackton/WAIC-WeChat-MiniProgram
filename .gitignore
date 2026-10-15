@@ -3,7 +3,18 @@ node_modules/
 
 # Build output
 dist/
+dist-test/
 *.tsbuildinfo
+
+# 副本與乾淨構建產物（src-clean 手工鏡像 + tsconfig.clean.json 編譯輸出）
+cloudrun/src-clean/
+cloudrun/dist-clean/
+
+# Qoder 審計取證截圖（臨時產物）
+.qoder-evidence/
+
+# 本地調試臨時產物（冒煙輸入樣本）
+didi-est.json
 
 # WeChat mini program local cache
 .miniprogram/

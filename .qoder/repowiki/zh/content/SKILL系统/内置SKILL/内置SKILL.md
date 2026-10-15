@@ -7,11 +7,13 @@
 - [预订中心 SKILL（小程序端）](file://miniprogram/src/skills/builtin/booking-center/index.ts)
 - [支付引导 SKILL（小程序端）](file://miniprogram/src/skills/builtin/payment-aicard/index.ts)
 - [火车票 SKILL（小程序端）](file://miniprogram/src/skills/builtin/train-12306/index.ts)
+- [地图天地图 SKILL（小程序端）](file://miniprogram/src/skills/builtin/map-tianditu/index.ts)
 - [星巴克咖啡云端端点](file://cloudrun/src/skill-coffee.ts)
 - [购物中心云端端点](file://cloudrun/src/skill-shopping.ts)
 - [预订中心云端端点](file://cloudrun/src/skill-booking.ts)
 - [支付引导云端端点](file://cloudrun/src/skill-payment.ts)
 - [火车票云端端点](file://cloudrun/src/skill-train.ts)
+- [地图天地图云端端点](file://cloudrun/src/skill-map.ts)
 - [外部跳转配置](file://cloudrun/src/external-jump.ts)
 - [云端 API 协议层](file://cloudrun/src/api.ts)
 - [微信云开发容器调用封装](file://miniprogram/src/services/cloud.ts)
@@ -21,11 +23,10 @@
 
 ## 更新摘要
 **变更内容**   
-- 新增星巴克咖啡 SKILL：门店搜索与订单创建，采用跳转模式完成真实交易
-- 新增购物中心 SKILL：商品搜索、购物车管理、结算跳转至京东/淘宝
-- 新增预订中心 SKILL：生活服务预约，跳转至美团小程序
-- 重构支付引导 SKILL：从合并支付改为聚合收银台引导，纯读操作
-- 统一采用"跳转外部应用"模式：所有涉及支付的SKILL都生成pending_external订单并跳转官方渠道
+- 新增地图天地图 SKILL：POI 搜索能力，支持多上游策略（高德优先、腾讯位置服务次之、天地图兜底）
+- 新增地图天地图云端端点：实现三上游切换、坐标系统转换、缓存机制和降级策略
+- 扩展规则规划器：集成附近地点搜索任务生成逻辑
+- 统一采用"多上游容错"模式：所有地图相关SKILL都具备多源数据获取和自动降级能力
 
 ## 目录
 1. [引言](#引言)
@@ -40,20 +41,21 @@
 10. [附录：调用示例与参数说明](#附录调用示例与参数说明)
 
 ## 引言
-本技术文档面向 WAIC-WeChat-MiniProgram 的内置 SKILL，重点覆盖六类能力：
+本技术文档面向 WAIC-WeChat-MiniProgram 的内置 SKILL，重点覆盖七类能力：
 - **星巴克咖啡预订 SKILL**：门店搜索、订单创建，采用跳转模式完成真实交易。
 - **购物中心 SKILL**：商品搜索、购物车管理、结算跳转至京东/淘宝。
 - **预订中心 SKILL**：生活服务预约，跳转至美团小程序。
 - **支付引导 SKILL**：聚合全域待支付订单，引导前往各渠道收银台。
 - **火车票预订 SKILL**：车次查询、座位选择、购票确认。
+- **地图天地图 SKILL**：POI 搜索、多上游策略、坐标系统转换。
 - **机票预订 SKILL**：航班查询、座位选择、购票确认。
 
 文档从系统架构、组件职责、数据流、错误处理、状态同步、云端通信协议等维度展开，并提供可操作的调用示例与参数说明，帮助开发者快速理解并扩展这些内置 SKILL。
 
-**重要更新**：2026年10月引入"跳转外部应用"模式，所有涉及支付的SKILL都采用pending_external订单状态，通过跳转官方小程序完成真实交易，而非在小程序内直接支付。
+**重要更新**：2026年10月引入"跳转外部应用"模式和"多上游容错"模式，所有涉及支付的SKILL都采用pending_external订单状态并通过跳转官方小程序完成真实交易；地图相关SKILL采用多上游策略确保服务高可用性。
 
 ## 项目结构
-本项目采用"小程序端 SKILL + 云端容器端点"的分层设计，统一采用跳转外部应用模式：
+本项目采用"小程序端 SKILL + 云端容器端点"的分层设计，统一采用跳转外部应用模式和多上游容错模式：
 - 小程序端负责 SKILL 元数据声明、能力调度、用户交互、云端调用封装与错误归一化。
 - 云端容器提供确定性模拟数据、基础鉴权、订单生命周期管理与跳转包构建。
 
@@ -65,68 +67,71 @@ B["购物中心 SKILL<br/>shopping-mall/index.ts"]
 C["预订中心 SKILL<br/>booking-center/index.ts"]
 D["支付引导 SKILL<br/>payment-aicard/index.ts"]
 E["火车票 SKILL<br/>train-12306/index.ts"]
-F["云端调用封装<br/>services/cloud.ts"]
-G["SKILL 协议类型<br/>types/skill.d.ts"]
-H["Agent 上下文类型<br/>types/context.d.ts"]
+F["地图天地图 SKILL<br/>map-tianditu/index.ts"]
+G["云端调用封装<br/>services/cloud.ts"]
+H["SKILL 协议类型<br/>types/skill.d.ts"]
+I["Agent 上下文类型<br/>types/context.d.ts"]
 end
 subgraph "云端容器"
-I["星巴克咖啡端点<br/>skill-coffee.ts"]
-J["购物中心端点<br/>skill-shopping.ts"]
-K["预订中心端点<br/>skill-booking.ts"]
-L["支付引导端点<br/>skill-payment.ts"]
-M["火车票端点<br/>skill-train.ts"]
-N["外部跳转配置<br/>external-jump.ts"]
-O["API 协议层<br/>api.ts"]
+J["星巴克咖啡端点<br/>skill-coffee.ts"]
+K["购物中心端点<br/>skill-shopping.ts"]
+L["预订中心端点<br/>skill-booking.ts"]
+M["支付引导端点<br/>skill-payment.ts"]
+N["火车票端点<br/>skill-train.ts"]
+O["地图天地图端点<br/>skill-map.ts"]
+P["外部跳转配置<br/>external-jump.ts"]
+Q["API 协议层<br/>api.ts"]
+R["地理坐标工具<br/>geo.ts"]
 end
-A --> F
-B --> F
-C --> F
-D --> F
-E --> F
-F --> I
-F --> J
-F --> K
-F --> L
-F --> M
-I --> N
-J --> N
-K --> N
-L --> N
-I --> O
-J --> O
-K --> O
-L --> O
-M --> O
 A --> G
 B --> G
 C --> G
 D --> G
 E --> G
+F --> G
+G --> J
+G --> K
+G --> L
+G --> M
+G --> N
+G --> O
+J --> P
+K --> P
+L --> P
+M --> P
+O --> R
+O --> Q
+J --> Q
+K --> Q
+L --> Q
+M --> Q
+N --> Q
+F --> H
 A --> H
 B --> H
 C --> H
 D --> H
 E --> H
+F --> I
+A --> I
+B --> I
+C --> I
+D --> I
+E --> I
 ```
 
 **图表来源**
-- [星巴克咖啡 SKILL（小程序端）:1-259](file://miniprogram/src/skills/builtin/coffee-starbucks/index.ts#L1-L259)
-- [购物中心 SKILL（小程序端）:1-340](file://miniprogram/src/skills/builtin/shopping-mall/index.ts#L1-L340)
-- [预订中心 SKILL（小程序端）:1-466](file://miniprogram/src/skills/builtin/booking-center/index.ts#L1-L466)
-- [支付引导 SKILL（小程序端）:1-117](file://miniprogram/src/skills/builtin/payment-aicard/index.ts#L1-L117)
-- [火车票 SKILL（小程序端）:1-293](file://miniprogram/src/skills/builtin/train-12306/index.ts#L1-L293)
+- [地图天地图 SKILL（小程序端）:1-224](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L1-L224)
+- [地图天地图云端端点:1-532](file://cloudrun/src/skill-map.ts#L1-L532)
 - [外部跳转配置:1-114](file://cloudrun/src/external-jump.ts#L1-L114)
 
 章节来源
-- [星巴克咖啡 SKILL（小程序端）:1-259](file://miniprogram/src/skills/builtin/coffee-starbucks/index.ts#L1-L259)
-- [购物中心 SKILL（小程序端）:1-340](file://miniprogram/src/skills/builtin/shopping-mall/index.ts#L1-L340)
-- [预订中心 SKILL（小程序端）:1-466](file://miniprogram/src/skills/builtin/booking-center/index.ts#L1-L466)
-- [支付引导 SKILL（小程序端）:1-117](file://miniprogram/src/skills/builtin/payment-aicard/index.ts#L1-L117)
-- [火车票 SKILL（小程序端）:1-293](file://miniprogram/src/skills/builtin/train-12306/index.ts#L1-L293)
+- [地图天地图 SKILL（小程序端）:1-224](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L1-L224)
+- [地图天地图云端端点:1-532](file://cloudrun/src/skill-map.ts#L1-L532)
 - [外部跳转配置:1-114](file://cloudrun/src/external-jump.ts#L1-L114)
 
 ## 核心组件
-本节聚焦六个内置 SKILL 的职责边界、能力声明与关键流程。
+本节聚焦七个内置 SKILL 的职责边界、能力声明与关键流程。
 
 ### 星巴克咖啡 SKILL
 - **能力**：search_store（幂等、无需确认）、place_order（非幂等、需确认、可回滚）。
@@ -157,15 +162,24 @@ E --> H
 - **输入输出**：通过 JSON Schema 描述；search_train返回bindings供book_ticket引用。
 - **云端接口**：/api/skill/skill.train.12306/search_train、/book_ticket、/book_ticket/cancel。
 
+### 地图天地图 SKILL
+- **能力**：search_poi（幂等、无需确认、不可回滚）。
+- **多上游策略**：高德优先、腾讯位置服务次之、天地图兜底，自动切换保证服务可用性。
+- **坐标系统**：支持gcj02和wgs84坐标转换，统一输出gcj02格式。
+- **缓存机制**：内存级缓存提升性能，TTL 10分钟，上限1000条。
+- **降级策略**：云端不可用或上游全部失败时返回模拟数据，卡片标识"模拟数据"。
+- **云端接口**：/api/skill/skill.map.tianditu/search_poi。
+
 章节来源
 - [星巴克咖啡 SKILL（小程序端）:65-153](file://miniprogram/src/skills/builtin/coffee-starbucks/index.ts#L65-L153)
 - [购物中心 SKILL（小程序端）:73-175](file://miniprogram/src/skills/builtin/shopping-mall/index.ts#L73-L175)
 - [预订中心 SKILL（小程序端）:93-234](file://miniprogram/src/skills/builtin/booking-center/index.ts#L93-L234)
 - [支付引导 SKILL（小程序端）:51-89](file://miniprogram/src/skills/builtin/payment-aicard/index.ts#L51-L89)
 - [火车票 SKILL（小程序端）:18-67](file://miniprogram/src/skills/builtin/train-12306/index.ts#L18-L67)
+- [地图天地图 SKILL（小程序端）:72-117](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L72-L117)
 
 ## 架构总览
-下图展示小程序端 SKILL 与云端容器的交互路径、统一封装与错误归一化机制，以及跳转外部应用的统一模式。
+下图展示小程序端 SKILL 与云端容器的交互路径、统一封装与错误归一化机制，以及跳转外部应用的统一模式和多上游容错策略。
 
 ```mermaid
 sequenceDiagram
@@ -173,24 +187,30 @@ participant U as "用户"
 participant S as "小程序端 SKILL"
 participant C as "云端调用封装<br/>services/cloud.ts"
 participant R as "云端端点<br/>各skill-*.ts"
+participant M as "地图多上游<br/>skill-map.ts"
 participant J as "外部跳转<br/>external-jump.ts"
-U->>S : 发起业务请求如"找星巴克门店"或"买火车票"
+U->>S : 发起业务请求如"找星巴克门店"或"查附近便利店"
 S->>C : POST /api/skill/...带 sessionId
 C->>R : 转发请求含 x-micromate-session
+alt 地图相关请求
+R->>M : 调用多上游POI搜索
+M->>M : 高德→腾讯→天地图 优先级切换
+M-->>R : 返回POI结果 + source标识
+else 其他业务请求
 R->>J : 构建跳转包 buildJump()
 J-->>R : 返回 JumpPackage(target, appId, copyText)
+end
 R-->>C : 返回 CloudResponse code=0 成功，非0失败
 C-->>S : 标准化响应网络错误重试、超时保护
 S-->>U : 返回结果或错误SkillError
 Note over S,R : 所有涉及支付的SKILL返回pending_external状态+jump跳转包
+Note over M : 地图SKILL返回source标识(amap/tencent_lbs/tianditu/mock)
 ```
 
 **图表来源**
 - [云端调用封装:64-149](file://miniprogram/src/services/cloud.ts#L64-L149)
+- [地图天地图云端端点:438-476](file://cloudrun/src/skill-map.ts#L438-L476)
 - [外部跳转配置:92-113](file://cloudrun/src/external-jump.ts#L92-L113)
-- [星巴克咖啡云端端点:167-174](file://cloudrun/src/skill-coffee.ts#L167-L174)
-- [购物中心云端端点:375-383](file://cloudrun/src/skill-shopping.ts#L375-L383)
-- [预订中心云端端点:230-242](file://cloudrun/src/skill-booking.ts#L230-L242)
 
 ## 详细组件分析
 
@@ -433,10 +453,63 @@ Note over S,R : 取消订单时调用 /book_ticket/cancel 并校验 openid
 - [火车票 SKILL（小程序端）:192-293](file://miniprogram/src/skills/builtin/train-12306/index.ts#L192-L293)
 - [火车票云端端点:1-148](file://cloudrun/src/skill-train.ts#L1-L148)
 
+### 地图天地图 SKILL
+- **能力与元数据**
+  - search_poi：按关键词搜索附近地点，幂等，无需人类确认，不可回滚。
+- **多上游策略**
+  - 高德优先（AMAP_KEY）：原生gcj02坐标，零转换，半径原生支援。
+  - 腾讯位置服务次之（TENCENT_LBS_KEY）：微信生态同源，免费额度约1万次/日。
+  - 天地图兜底（TIANDITU_KEY）：CGCS2000坐标系，需要双道坐标转换。
+- **坐标系统处理**
+  - 输入：gcj02坐标（中国大陆标准）。
+  - 处理：天地图需要gcj02→wgs84→gcj02转换。
+  - 输出：统一gcj02坐标格式。
+- **缓存机制**
+  - 内存级缓存，TTL 10分钟，上限1000条。
+  - 缓存键：网格坐标+关键词，粒度0.02°（约2.2km）。
+  - 缓存命中时重算距离值，避免中心移动导致的数据偏差。
+- **降级策略**
+  - 云端不可用（负数码）或上游全部失败（业务503）：返回模拟数据。
+  - 模拟数据使用djb2哈希算法保证确定性，同词同位置稳定。
+  - 卡片以source='mock'标识"模拟数据"，不误导用户。
+- **错误处理**
+  - 云端code=0成功；code=-1或503降级为本地mock；其他错误映射为POI_SEARCH_FAILED。
+  - 坐标验证：gcj02覆盖范围检查（lat:3-54, lng:73-136）。
+  - 半径限制：300-20000米，默认5000米。
+  - 返回数量限制：1-10条，默认5条。
+
+```mermaid
+flowchart TD
+Start(["invoke('search_poi', input)"]) --> ValidateInput{"验证输入参数"}
+ValidateInput --> |有效| CallCloud["调用云端 search_poi"]
+ValidateInput --> |无效| InvalidError["返回 INVALID_LOCATION 错误"]
+CallCloud --> CloudRes{"云端 code==0 ?"}
+CloudRes --> |是| ReturnData["返回POI数据 + source标识"]
+CloudRes --> |否| CheckCode{"code < 0 或 code == 503 ?"}
+CheckCode --> |是| MockData["生成模拟POI数据"]
+CheckCode --> |否| SearchFailed["返回 POI_SEARCH_FAILED 错误"]
+MockData --> ReturnMock["返回模拟数据 + source='mock'"]
+ReturnData --> End(["结束"])
+ReturnMock --> End
+InvalidError --> End
+SearchFailed --> End
+```
+
+**图表来源**
+- [地图天地图 SKILL（小程序端）:163-223](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L163-L223)
+- [地图天地图云端端点:487-527](file://cloudrun/src/skill-map.ts#L487-L527)
+
+章节来源
+- [地图天地图 SKILL（小程序端）:27-117](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L27-L117)
+- [地图天地图 SKILL（小程序端）:119-159](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L119-L159)
+- [地图天地图 SKILL（小程序端）:161-224](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L161-L224)
+- [地图天地图云端端点:1-532](file://cloudrun/src/skill-map.ts#L1-L532)
+
 ## 依赖关系分析
 - 小程序端 SKILL 依赖 services/cloud.ts 进行云端调用，统一封装超时、重试、错误归一化。
 - 云端端点依赖 api.ts 提供的 ok/fail/badRequest/unauthorized/forbidden 工具函数，保证协议一致。
 - 所有涉及跳转的SKILL依赖 external-jump.ts 构建统一的 JumpPackage。
+- 地图天地图SKILL依赖 geo.ts 进行坐标系统转换。
 - SKILL 元数据与能力声明遵循 types/skill.d.ts 定义的 SkillMeta/SkillCapability/SkillInstance 接口。
 - AgentContext 提供会话级上下文，包括 sessionId、userId、globals 等，用于云端鉴权与会话关联。
 
@@ -447,38 +520,41 @@ Shopping["购物中心 SKILL"] --> Cloud
 Booking["预订中心 SKILL"] --> Cloud
 Payment["支付引导 SKILL"] --> Cloud
 Train["火车票 SKILL"] --> Cloud
+Map["地图天地图 SKILL"] --> Cloud
 Cloud --> CoffeeCloud["skill-coffee.ts"]
 Cloud --> ShoppingCloud["skill-shopping.ts"]
 Cloud --> BookingCloud["skill-booking.ts"]
 Cloud --> PaymentCloud["skill-payment.ts"]
 Cloud --> TrainCloud["skill-train.ts"]
+Cloud --> MapCloud["skill-map.ts"]
 CoffeeCloud --> ExternalJump["external-jump.ts"]
 ShoppingCloud --> ExternalJump
 BookingCloud --> ExternalJump
 PaymentCloud --> ExternalJump
-TrainCloud --> Api["api.ts"]
+MapCloud --> GeoTool["geo.ts"]
+MapCloud --> Api["api.ts"]
 CoffeeCloud --> Api
 ShoppingCloud --> Api
 BookingCloud --> Api
 PaymentCloud --> Api
+TrainCloud --> Api
 Coffee --> Types["types/skill.d.ts"]
 Shopping --> Types
 Booking --> Types
 Payment --> Types
 Train --> Types
+Map --> Types
 Coffee --> Ctx["types/context.d.ts"]
 Shopping --> Ctx
 Booking --> Ctx
 Payment --> Ctx
 Train --> Ctx
+Map --> Ctx
 ```
 
 **图表来源**
-- [星巴克咖啡 SKILL（小程序端）:1-259](file://miniprogram/src/skills/builtin/coffee-starbucks/index.ts#L1-L259)
-- [购物中心 SKILL（小程序端）:1-340](file://miniprogram/src/skills/builtin/shopping-mall/index.ts#L1-L340)
-- [预订中心 SKILL（小程序端）:1-466](file://miniprogram/src/skills/builtin/booking-center/index.ts#L1-L466)
-- [支付引导 SKILL（小程序端）:1-117](file://miniprogram/src/skills/builtin/payment-aicard/index.ts#L1-L117)
-- [火车票 SKILL（小程序端）:1-293](file://miniprogram/src/skills/builtin/train-12306/index.ts#L1-L293)
+- [地图天地图 SKILL（小程序端）:1-224](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L1-L224)
+- [地图天地图云端端点:1-532](file://cloudrun/src/skill-map.ts#L1-L532)
 - [外部跳转配置:1-114](file://cloudrun/src/external-jump.ts#L1-L114)
 
 章节来源
@@ -492,7 +568,7 @@ Train --> Ctx
   - 重试策略：最多 3 次，基础延迟 600ms，针对 CloudNetworkError 自动重试。
   - 开发环境降级：wx.cloud.callContainer 不可用时返回 code:-1，允许 SKILL mock 兜底。
 - 幂等性与回滚
-  - search_store/search_products/search_services/search_train 为幂等操作，适合重复调用。
+  - search_store/search_products/search_services/search_train/search_poi 为幂等操作，适合重复调用。
   - place_order/add_to_cart/checkout/create_reservation/book_ticket 为非幂等写操作，必须 requiresHumanConfirm=true，且实现 rollback。
 - 跳转模式一致性
   - 所有涉及支付的SKILL统一返回 pending_external 状态 + JumpPackage。
@@ -500,11 +576,22 @@ Train --> Ctx
 - 外部跳转配置
   - EXTERNAL_JUMP 环境变量集中管理各渠道 appId 与 path。
   - 未配置的渠道自动降级为 copy-only 模式。
+- 多上游容错策略
+  - 地图SKILL采用三上游优先级切换：高德→腾讯→天地图。
+  - 上游失败仅指请求/业务错（null），零结果（[]）为正常语义不触发回落。
+  - 三把金钥皆无则交由handler统一翻译为业务503。
+- 缓存优化
+  - 内存级缓存TTL 10分钟，上限1000条，超限淘汰最早插入者。
+  - 缓存键使用0.02°网格坐标+关键词，平衡精度与命中率。
+  - 缓存命中时重算距离值，避免中心移动导致的数据偏差。
 
 章节来源
 - [外部跳转配置:8-16](file://cloudrun/src/external-jump.ts#L8-L16)
 - [外部跳转配置:42-55](file://cloudrun/src/external-jump.ts#L42-L55)
 - [外部跳转配置:82-85](file://cloudrun/src/external-jump.ts#L82-L85)
+- [地图天地图云端端点:49-52](file://cloudrun/src/skill-map.ts#L49-L52)
+- [地图天地图云端端点:59-83](file://cloudrun/src/skill-map.ts#L59-L83)
+- [地图天地图云端端点:406-476](file://cloudrun/src/skill-map.ts#L406-L476)
 
 ## 故障排查指南
 - 云端调用失败
@@ -516,6 +603,12 @@ Train --> Ctx
   - 预订中心：SERVICE_SEARCH_FAILED、RESERVATION_FAILED、SLOT_UNAVAILABLE、DUPLICATED_RESERVATION。
   - 支付引导：PAY_GUIDE_FAILED。
   - 火车票：SEARCH_FAILED、NO_TICKETS、BOOK_FAILED。
+  - 地图天地图：POI_SEARCH_FAILED、INVALID_LOCATION。
+- 地图相关故障
+  - 检查 AMAP_KEY/TENCENT_LBS_KEY/TIANDITU_KEY 环境变量是否正确配置。
+  - 验证坐标是否在gcj02覆盖范围内（lat:3-54, lng:73-136）。
+  - 确认radiusM在300-20000米范围内，limit在1-10范围内。
+  - 检查上游服务可用性：高德Web服务、腾讯位置服务、天地图v2搜索。
 - 鉴权问题
   - 云端端点要求携带 x-wx-openid，缺失将返回 unauthorized。
   - 订单取消需校验 owner 与 openid 匹配，否则返回 forbidden。
@@ -530,9 +623,10 @@ Train --> Ctx
 - [预订中心 SKILL（小程序端）:336-396](file://miniprogram/src/skills/builtin/booking-center/index.ts#L336-L396)
 - [支付引导 SKILL（小程序端）:101-114](file://miniprogram/src/skills/builtin/payment-aicard/index.ts#L101-L114)
 - [火车票 SKILL（小程序端）:212-275](file://miniprogram/src/skills/builtin/train-12306/index.ts#L212-L275)
+- [地图天地图 SKILL（小程序端）:170-186](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L170-L186)
 
 ## 结论
-内置 SKILL 通过清晰的元数据与能力声明，结合统一的云端调用封装与跳转包构建，实现了可扩展、可观测、可回滚的业务流程。2026年10月引入的"跳转外部应用"模式统一了所有涉及支付的SKILL行为：生成pending_external订单+跳转官方小程序完成真实交易。这种设计既保证了用户体验的一致性，又避免了个人主体无法开通微信支付的技术限制。整体架构兼顾开发与生产环境的稳定性与可维护性。
+内置 SKILL 通过清晰的元数据与能力声明，结合统一的云端调用封装与跳转包构建，实现了可扩展、可观测、可回滚的业务流程。2026年10月引入的"跳转外部应用"模式统一了所有涉及支付的SKILL行为：生成pending_external订单+跳转官方小程序完成真实交易。新增的地图天地图SKILL采用多上游容错策略，确保服务高可用性：高德优先、腾讯位置服务次之、天地图兜底，三把金钥谁配了用谁。这种设计既保证了用户体验的一致性，又避免了个人主体无法开通微信支付的技术限制，同时通过多上游策略提升了地图服务的稳定性和可靠性。整体架构兼顾开发与生产环境的稳定性与可维护性。
 
 ## 附录：调用示例与参数说明
 
@@ -651,3 +745,18 @@ Train --> Ctx
 - [火车票云端端点:46-77](file://cloudrun/src/skill-train.ts#L46-L77)
 - [火车票云端端点:89-116](file://cloudrun/src/skill-train.ts#L89-L116)
 - [火车票云端端点:122-141](file://cloudrun/src/skill-train.ts#L122-L141)
+
+### 地图天地图 SKILL
+- **POI搜索**
+  - 动作：search_poi
+  - 输入字段：keyword（必填，≤20字）、lat（必填，gcj02纬度）、lng（必填，gcj02经度）、radiusM（可选，300-20000米，默认5000）、limit（可选，1-10，默认5）
+  - 输出字段：keyword、radiusM、pois[]（name、address、phone、lat、lng、distanceM）、source（amap/tencent_lbs/tianditu/mock）
+  - 行为：按距离升序返回POI列表，source标识数据来源
+  - 示例调用路径：POST /api/skill/skill.map.tianditu/search_poi
+  - 示例请求：{"keyword":"便利店","lat":39.9042,"lng":116.4074}
+  - 示例响应：{"code":0,"data":{"keyword":"便利店","radiusM":5000,"pois":[{"name":"全家便利店","address":"北京市朝阳区建国路100号","lat":39.9045,"lng":116.4078,"distanceM":150}],"source":"amap"}}
+
+章节来源
+- [地图天地图 SKILL（小程序端）:27-117](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L27-L117)
+- [地图天地图 SKILL（小程序端）:161-224](file://miniprogram/src/skills/builtin/map-tianditu/index.ts#L161-L224)
+- [地图天地图云端端点:487-527](file://cloudrun/src/skill-map.ts#L487-L527)

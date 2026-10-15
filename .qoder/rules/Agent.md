@@ -85,6 +85,7 @@ src/
 ├── skills/                  # SKILL 註冊與適配
 │   ├── registry.ts          # SKILL 註冊中心
 │   ├── adapter.ts           # 統一呼叫適配器
+│   ├── dynamic.ts           # 動態技能清單同步 + thin proxy 註冊（§ 7.4）
 │   └── builtin/             # 內建 SKILL
 │       ├── train-12306/
 │       ├── coffee-starbucks/
@@ -338,6 +339,18 @@ export const instance: SkillInstance = {
 - SKILL ID 格式：`skill.{domain}.{app}`（例：`skill.train.12306`、`skill.coffee.starbucks`）
 - 註冊位置：`src/skills/builtin/<name>/index.ts`，並在 `app.ts` 透過 `SkillRegistry.register()` 注入
 
+### 7.4 動態技能（2026-10 擴展：L1 註冊 / L2 執行 / L3 鍛造）
+
+動態技能 = 雲端宣告式定義（JSON 數據，**絕不下載 / 執行外部代碼**），經管理員審核後進入版本化 manifest，小程序側以 thin proxy 註冊消費，與內置技能同款 `postContainer` 轉發模式。
+
+- **ID 與命名空間**：`skill.dynamic.<伺服器 requestId>`，單一 capability `action='run'`；manifest 條目僅接受此前綴，內置技能不可被覆蓋（碰撞測試守護）
+- **生命週期**：`draft → approved ⇄ disabled`，`blocked / rejected` 為終態；轉移以 version CAS 樂觀鎖原子更新，僅管理員（`DYNAMIC_SKILL_ADMIN_OPENIDS`）可審批；需求原文僅本人與管理員可見
+- **執行器**：`http`（唯讀 GET 連接器，禁重定向、SSRF 私網 / metadata 阻斷、256KB / 8s 上限）、`mcp`（服務端預註冊端點）、`llm`（無工具，不得假扮即時數據接口，輸出帶 `ai_generated`）；run 每次重新驗證 approved 狀態與輸入 schema
+- **鍛造（forge）**：需求＋可選教材 → LLM 起草受限 schema（扁平 object、1-6 純量參數、`additionalProperties:false`）；提交前 PII 自動遮罩；即時數據需求無對應連接器時硬攔截為 `blocked`；**缺口僅產生提案卡，用戶確認去敏語義後才發送，不自動發布**
+- **小程序側**：每輪規劃前同步 manifest（`src/skills/dynamic.ts`），同步失敗 / 停用 / 存儲不可用 → fail-closed 全量撤下動態技能（內置不受影響）；結果以受控 display 卡展示，不暴露 raw JSON；規劃器缺口以 `missingCapability`（僅空 tasks 合法）與缺參追問分流
+- **部署開關**：`ENABLE_DYNAMIC_SKILLS`（'0' 關閉）；開發記憶體存儲僅 `NODE_ENV≠production` 且 `DYNAMIC_SKILL_DEV_MEMORY=1`；正式環境 MySQL 不可用時動態能力整體 fail-closed（清單收斂為空，寫路徑拒絕）
+- **契約同步紅線**：雙端契約（`cloudrun/src/skill-dynamic-types.ts` ↔ `miniprogram/src/types/dynamic-skill.d.ts`）以兩份副本維護，變更必須同步修改
+
 ---
 
 ## 8. 編排器實作要點
@@ -521,6 +534,7 @@ wx.requestPayment({
 - [ ] Prompt 模板更新時同步更新測試案例
 - [ ] 新增的 LLM 輸出結構已加入 `parser.ts` 的 schema 驗證
 - [ ] LLM 生成內容已加入 `ai_generated` 標記
+- [ ] 動態技能契約變更已雙端同步（skill-dynamic-types.ts ↔ dynamic-skill.d.ts）
 - [ ] 依賴方向未發生反向引用
 
 ---
