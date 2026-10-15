@@ -51,6 +51,34 @@ description: MicroMate 專案級 AI 代理指引——規範三層架構、SKILL
 | **冪等與可回滾** | 每個 SKILL 必須支援 `rollback`，失敗可部分撤銷 |
 | **型別安全** | SKILL 入參/出參透過泛型強約束，禁止寬鬆型別 |
 
+### 2.1 執行檔位模型（縱軸五檔）
+
+> 主動性縱軸：Agent 對「已定義問題」的執行深度。檔位由 SKILL 元數據
+> （`idempotent` / `reversible` / `requiresHumanConfirm`）推導，規劃期按
+> 「失敗代價三問」自動定檔，而非各 SKILL 各自為政；產品語言全線對齊此表
+> （推送文案、checkpoint 彈窗、監控命中落地皆以檔位語義命名）。與橫軸
+> （問題定義權：誰定義問題）正交——條件監控中問題由用戶定義（指定車次 /
+> 城市 / 降幅），Agent 只按規則掃描並按檔位交付。
+
+| 檔位 | 語義 | 元數據判定 | 本專案對應物 |
+|------|------|-----------|-------------|
+| **T1 告知** | 陳述事實，不含行動 | 純查詢（唯讀 capability） | 車次 / 航班 / 天氣交付卡展示；`weather_alert` 掃描結論（拉模式） |
+| **T2 建議** | 給出傾向與理由，決策留用戶 | 查詢 + 推薦邏輯 | 出發提醒文案的「帶傘 / 考慮改簽」建議詞 |
+| **T3 起草待確認** | 預組裝完整行動要素，一鍵確認 | `requiresHumanConfirm: true` | checkpoint 彈窗；監控命中 monhit 直達（組裝預訂 / 查詢意圖，確認彈窗把關） |
+| **T4 執行可逆** | 直接執行，失敗可撤銷 | `reversible: true` 且 `requiresHumanConfirm: false` | 跳轉下單卡生成（`pending_external` 可 cancel / rollback） |
+| **T5 執行不可逆** | 直接執行，無法撤銷 | `reversible: false` 且涉及資金 / 不可逆資源 | AI 專屬卡支付（銀行級密碼框 + 金額閾值二次確認為硬紅線） |
+
+**失敗代價三問（規劃期定檔判據，按序自問）**：
+
+1. **出錯誰買單？** 責任歸 Agent（資金 / 不可逆資源）→ 至少 T3，且 T5 必須掛三道防線（rollback / 密碼框 / 重置）
+2. **錯了能否撤銷？** `reversible: false` → 不允許跳過 T3 直接執行
+3. **重複執行是否無害？** `idempotent: false` → 併發 / 重試場景先窄化為單次語義再定檔
+
+**與「最小打擾」原則的關係（2026-10 修訂的理論依據）**：放權深度不看
+謹慎程度，看**責任歸屬與代價結構**——可回滾的寫操作（T4）默認自動執行
+不打擾；不可逆場景（T5）永遠回到 T3 起草檔由用戶拍板。`requiresHumanConfirm`
+因此不是「安全開關」，而是「強制升檔到 T3」的聲明。
+
 ---
 
 ## 3. 三層架構
@@ -290,7 +318,8 @@ export interface ChatMessage {
 3. 若 `reversible=true`，**必須**實作 `rollback(capability, input, result, ctx)`
 4. 寫操作 capability 的 `requiresHumanConfirm` 預設為 `false`（2026-10 修訂：預設自動執行，
    遵循「最小打擾」原則；安全网靠 rollback 機制 + AI 專屬卡銀行級密碼框 + 重置按鈕）。
-   支付 / 隱私 / 不可逆場景可手動設為 `true` 以重啟 checkpoint 彈窗
+   支付 / 隱私 / 不可逆場景可手動設為 `true` 以重啟 checkpoint 彈窗（= 強制升檔
+   到 T3 起草待確認，檔位模型見 § 2.1）
 5. 透過 `wx.cloud.callContainer` 呼叫雲端能力，禁止在小程序端直接對接第三方 API
 
 ### 7.2 標準骨架
@@ -369,7 +398,7 @@ export const instance: SkillInstance = {
 - **並行執行**所有就緒的 Task（`Promise.all`）
 - **死鎖偵測**：`ready.length === 0 && running.size === 0` 時拋出 `Deadlock detected: no task can proceed`
 - `inputBindings` 解析：支援點號路徑（如 `data.userLocation.lat`）
-- 寫操作前檢查 `requiresHumanConfirm`（預設 false）：若為 `true` 才進入 `waiting_human` 等待用戶確認（2026-10 修訂：預設自動執行，遵循「最小打擾」原則；安全网靠 rollback 機制 + AI 專屬卡銀行級密碼框 + 重置按鈕）
+- 寫操作前檢查 `requiresHumanConfirm`（預設 false）：若為 `true` 才進入 `waiting_human` 等待用戶確認（2026-10 修訂：預設自動執行，遵循「最小打擾」原則；安全网靠 rollback 機制 + AI 專屬卡銀行級密碼框 + 重置按鈕；檔位語義見 § 2.1）
 
 ### 8.3 Planner（LLM 任務拆解）
 
@@ -529,8 +558,9 @@ wx.requestPayment({
 每次變更提交前，AI 代理必須逐項確認：
 
 - [ ] TypeScript 編譯無錯誤（`tsc --noEmit`）
-- [ ] 所有 SKILL 的 `requiresHumanConfirm` 設定正確（寫操作必為 `true`）
+- [ ] 所有 SKILL 的執行檔位（§ 2.1）標註正確：不可逆 / 資金場景必為 T3+（`requiresHumanConfirm: true` 或支付硬紅線防線齊備）；可逆寫操作（T4）默認 `false` 不打擾
 - [ ] 寫操作的 SKILL 已實作 `rollback`
+- [ ] 新增監控 / 推送場景已對齊檔位語言（告知 / 建議不帶行動按鈕；起草待確認必經確認彈窗）
 - [ ] Prompt 模板更新時同步更新測試案例
 - [ ] 新增的 LLM 輸出結構已加入 `parser.ts` 的 schema 驗證
 - [ ] LLM 生成內容已加入 `ai_generated` 標記
