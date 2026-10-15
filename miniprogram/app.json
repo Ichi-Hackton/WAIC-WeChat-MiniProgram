@@ -4,7 +4,9 @@
     "pages/profile/index",
     "pages/trips/index",
     "pages/passenger-edit/index",
-    "pages/address-edit/index"
+    "pages/address-edit/index",
+    "pages/mail-account-edit/index",
+    "pages/skills-center/index"
   ],
   "window": {
     "navigationBarTitleText": "MicroMate",

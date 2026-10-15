@@ -46,6 +46,13 @@ export interface PlannerLLMOutput {
     activity?: string;
   };
   message?: string;
+  /** 能力缺口（動態技能計劃新增，僅 tasks 為空時合法）：意圖超出可用
+   *  SKILL 能力範圍且無法靠補參數解決時攜帶；非空 tasks 或畸形形態
+   *  時靜默剔除（寬容處理，與 memory 欄位同哲學——不因增強欄位否決 Plan） */
+  missingCapability?: {
+    skillName?: string;
+    suggestion?: string;
+  };
   /** 隱式偏好沉澱增量（可選增強欄位，prompt 規則 12）：本輪對話中用戶
    *   顯式表達的長期偏好，鍵限 storage/preferences 白名單域。不進 Plan
    *   （記憶副作用而非任務數據），由 client 規劃後處理寫回 */
@@ -140,6 +147,21 @@ export function validatePlannerOutput(raw: unknown): PlannerLLMOutput {
   ) {
     delete o.memory;
   }
+  // missingCapability 僅在「空 tasks + 合法形態」時保留（skillName /
+  // suggestion 均為非空字串）；其餘情況（有任務 / 畸形 / 缺欄位）剔除——
+  // 缺口語義只在無法規劃時有意義，與任務並存即為模型輸出噪聲
+  const mc = o.missingCapability;
+  const mcValid =
+    Array.isArray(o.tasks) &&
+    (o.tasks as unknown[]).length === 0 &&
+    typeof mc === 'object' &&
+    mc !== null &&
+    !Array.isArray(mc) &&
+    typeof (mc as Record<string, unknown>).skillName === 'string' &&
+    ((mc as Record<string, unknown>).skillName as string).trim().length > 0 &&
+    typeof (mc as Record<string, unknown>).suggestion === 'string' &&
+    ((mc as Record<string, unknown>).suggestion as string).trim().length > 0;
+  if (!mcValid) delete o.missingCapability;
   return o as PlannerLLMOutput;
 }
 
@@ -197,6 +219,15 @@ export function toPlan(llm: PlannerLLMOutput, intent: string, planId: string): P
     status: 'draft',
     // LLM 附注透傳：空 tasks 時的追問文案（orchestrator 據此提示用戶補充參數）
     ...(llm.message ? { note: llm.message } : {}),
+    // 能力缺口透傳（validatePlannerOutput 已保證僅空 tasks + 合法形態到達此處）
+    ...(llm.missingCapability
+      ? {
+          missingCapability: {
+            skillName: llm.missingCapability.skillName!.slice(0, 12),
+            suggestion: llm.missingCapability.suggestion!.slice(0, 60),
+          },
+        }
+      : {}),
     ...(trip ? { trip } : {}),
   };
 }
@@ -256,6 +287,7 @@ const BINDING_FIELDS_BY_ACTION: Readonly<Record<string, readonly string[]>> = {
     'data.priceCentByService.*',
   ],
   search_events: ['data.firstEventId', 'data.eventIdByName.*'],
+  draft_mail: ['data.subject', 'data.body'],
   list_sessions: [
     'data.firstAvailableSessionId',
     'data.firstAvailableTierId',

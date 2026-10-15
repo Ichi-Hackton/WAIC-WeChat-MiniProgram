@@ -17,6 +17,8 @@
  *     統一入口（半屏白名單命中時半屏打開，渠道側支付完成後關閉即回對話流）；
  *     「標記已支付」為跳轉模式的支付閉環——真實支付在官方渠道收銀台，
  *     用戶自證成交後雲端歸檔 completed + 本地 paidAt 落盤
+ *   - 餘票監控（2026-10 第二梯隊·項A）：首頁售罄車次可一鍵加入監控，
+ *     雲端定時 tick 掃描回寫命中狀態，本頁展示與刪除（services/monitors）
  *
  * 行程建檔（Plan 確認後 orchestrator 調 saveTripFromPlan）與狀態同步
  * （調度結束調 updateTripFromPlan）均為自動完成。onShow 刷新：從首頁
@@ -24,7 +26,9 @@
  */
 
 import { listTrips, removeTrip, markSubscribed, markNodePaid, getTrip } from '../../src/storage/trip';
+import { listMonitors, replaceMonitors, removeMonitorLocal, type MonitorEntry } from '../../src/storage/monitors';
 import { shareTripToCloud, fetchSharedTrip } from '../../src/services/trip-share';
+import { fetchMyMonitors, removeMonitorCloud } from '../../src/services/monitors';
 import { jumpExternal, confirmExternalPaid } from '../../src/services/jump';
 import { recordEvent } from '../../src/services/metrics';
 import { METRIC_NAMES } from '../../src/utils/metrics';
@@ -70,6 +74,17 @@ interface TripRow {
   timeline: TimelineRow[];
 }
 
+/** 餘票監控行（展示形態；雲端 tick 掃描回寫命中狀態，命中即終態） */
+interface MonitorRow {
+  id: string;
+  /** 展示摘要（「北京→上海 2026-10-20 G5」） */
+  label: string;
+  statusLabel: string;
+  statusClass: string;
+  /** 最近掃描結論 / 命中詳情 */
+  lastMessage: string;
+}
+
 /** 朋友分享的只讀行程（展示形態；?shared=shareId 打開時頂部區塊） */
 interface SharedBlockData {
   loading: boolean;
@@ -106,6 +121,8 @@ interface TripsPageData {
   subReady: boolean;
   /** 朋友分享的只讀行程（分享卡打開時存在） */
   sharedBlock: SharedBlockData | null;
+  /** 餘票監控列表（雲端權威同步後的展示行） */
+  monitors: MonitorRow[];
   [key: string]: unknown;
 }
 
@@ -135,6 +152,10 @@ interface TripsPageThis {
   onTapNodeJump: (e: { currentTarget?: { dataset?: { appid?: string; path?: string } } }) => void;
   onTapNodePaid: (e: { currentTarget?: { dataset?: { tripid?: string; taskid?: string } } }) => void;
   onTapNodeCopy: (e: { currentTarget?: { dataset?: { text?: string } } }) => void;
+  /** 同步餘票監控（雲端權威 → 本地副本 → 展示行） */
+  syncMonitors: () => void;
+  /** 刪除監控（雲端刪除成功才移除本地副本，防幽靈監控） */
+  onTapRemoveMonitor: (e: { currentTarget?: { dataset?: { id?: string } } }) => void;
 }
 
 /** 行程條目 → 列表行（口語標籤與字面日期同值時不重複展示） */
@@ -175,6 +196,17 @@ function toTripRows(book: TripEntry[], expandedIds: Set<string>): TripRow[] {
   }));
 }
 
+/** 監控條目 → 列表行（命中即終態：徽章轉綠，tick 不再掃描該條） */
+function toMonitorRows(list: MonitorEntry[]): MonitorRow[] {
+  return list.map((m) => ({
+    id: m.monitorId,
+    label: m.label,
+    statusLabel: m.hit ? '已命中' : '監控中',
+    statusClass: m.hit ? 'monitor-hit' : 'monitor-waiting',
+    lastMessage: m.lastMessage,
+  }));
+}
+
 /** 分享標題（口語日期標籤 + 城市；字面日期回退 MM-DD） */
 function shareTitle(t: TripEntry): string {
   const day = t.dateLabel && t.dateLabel !== t.date ? t.dateLabel : t.date.slice(5);
@@ -186,6 +218,7 @@ Page({
     trips: [],
     subReady: SUBSCRIBE_TMPL_TRIP_REMIND !== '',
     sharedBlock: null,
+    monitors: [],
   } as TripsPageData,
 
   /** 分享卡入口：?shared=shareId 時拉取只讀行程展示於頂部 */
@@ -199,6 +232,7 @@ Page({
   /** 每次現身刷新行程簿（首頁新增行程 / 調度完成同步後返回即時可見） */
   onShow(this: TripsPageThis): void {
     this.refresh();
+    this.syncMonitors();
   },
 
   /**
@@ -301,6 +335,64 @@ Page({
   /** 內部：重讀行程簿並映射展示形態 */
   refresh(this: TripsPageThis): void {
     this.setData({ trips: toTripRows(listTrips(), this.expandedIds) });
+  },
+
+  /**
+   * 內部：同步餘票監控（雲端權威 → 本地副本 → 展示行）
+   *
+   * 先以本地副本立即渲染（離線可見 + 秒開），再拉雲端覆蓋（tick 掃描
+   * 回寫的命中狀態以雲端為準）；拉取失敗保留本地副本——避免網路抖動
+   * 導致監控「憑空消失」。
+   */
+  syncMonitors(this: TripsPageThis): void {
+    this.setData({ monitors: toMonitorRows(listMonitors()) });
+    void fetchMyMonitors(CLOUD_ENV)
+      .then((res) => {
+        if (res.code !== 0 || !Array.isArray(res.data)) return;
+        replaceMonitors(
+          res.data.map((m) => ({
+            monitorId: m.monitorId,
+            label: m.label,
+            kind: m.kind,
+            params: m.params,
+            hit: m.hit,
+            lastMessage: m.lastMessage,
+            lastCheckedAt: m.lastCheckedAt,
+            createdAt: m.createdAt,
+          })),
+        );
+        this.setData({ monitors: toMonitorRows(listMonitors()) });
+      })
+      .catch(() => {
+        /* 拉取失敗保留本地副本，靜默降級（下次 onShow 重試） */
+      });
+  },
+
+  /** 刪除監控（模態確認；雲端刪除成功才移除本地副本——防「雲端仍在掃描、本地卻不可見」的幽靈監控） */
+  onTapRemoveMonitor(this: TripsPageThis, e: { currentTarget?: { dataset?: { id?: string } } }): void {
+    const id = e.currentTarget?.dataset?.id ?? '';
+    if (!id) return;
+    wx.showModal({
+      title: '刪除監控',
+      content: '刪除後不再掃描該車次餘票，確定刪除嗎？',
+      confirmText: '刪除',
+      success: (res) => {
+        if (!res.confirm) return;
+        void removeMonitorCloud(CLOUD_ENV, id)
+          .then((r) => {
+            if (r.code !== 0) {
+              wx.showToast({ title: r.message || '刪除失敗，請稍後再試', icon: 'none' });
+              return;
+            }
+            removeMonitorLocal(id);
+            this.syncMonitors();
+            wx.showToast({ title: '已刪除', icon: 'success' });
+          })
+          .catch(() => {
+            wx.showToast({ title: '網路不暢，請稍後再試', icon: 'none' });
+          });
+      },
+    });
   },
 
   /** 卡片頭點擊：展開 / 收起時間線 */

@@ -88,4 +88,18 @@
     </view>
   </view>
 
+  <!-- ═══ 餘票監控（2026-10 第二梯隊·項A：首頁售罄車次加入，雲端定時 tick 掃描回寫）═══ -->
+  <view wx:if="{{monitors.length > 0}}" class="monitor-block">
+    <view class="monitor-title">餘票監控</view>
+    <view wx:for="{{monitors}}" wx:key="id" class="monitor-row">
+      <view class="monitor-info">
+        <view class="monitor-label">{{item.label}}</view>
+        <view wx:if="{{item.lastMessage}}" class="monitor-msg">{{item.lastMessage}}</view>
+      </view>
+      <text class="monitor-status {{item.statusClass}}">{{item.statusLabel}}</text>
+      <view class="monitor-remove" hover-class="btn-hover" bindtap="onTapRemoveMonitor" data-id="{{item.id}}">刪除</view>
+    </view>
+    <view class="monitor-hint">有票時經訂閱消息提醒；未訂閱或模板未配置時，回到此頁即可查看掃描結論。</view>
+  </view>
+
 </view>

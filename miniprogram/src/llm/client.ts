@@ -22,6 +22,7 @@ import {
 } from '../storage/preferences';
 import { isCrisisMessage } from '../utils/counseling';
 import { buildPlannerPrompt } from './prompts/planner';
+import type { ReplanFailedContext } from './prompts/planner';
 import { buildClassifierPrompt } from './prompts/classifier';
 import type { ClassifierOutput } from './prompts/classifier';
 import { toPlan, validatePlannerOutput, validatePlanBindings, extractJson, LLMParserError } from './parser';
@@ -307,6 +308,63 @@ export type UnderstandResult =
   | { kind: 'chat'; reply: string };
 
 /**
+ * 業務失敗重規劃（規範 § 9「業務錯誤回傳 LLM 調整 Plan」的落地接線，
+ * 2026-10 第一梯隊·項6，借鑑千問 Go 動態路徑切換）
+ *
+ * 與 plan() 同鏈路（prompt 附帶上一輪業務失敗上下文），語義差異：
+ *   - 盡力而為：任何失敗（LLM 不可用 / 解析失敗 / 空任務 / 綁定引用
+ *     無效）返回 null，由調用方維持原失敗語義——重規劃是增強路徑
+ *     而非關鍵路徑，不得讓重試本身製造新的失敗表達
+ *   - 不沉澱記憶：首輪規劃已沉澱，重複沉澱會污染 asked 記錄
+ *   - 危機信號不重規劃（安全網優先）；DEV 降級路徑不適用（規則式
+ *     規劃器無失敗感知，硬套會產出與首輪相同的方案）
+ *
+ * @returns 調整後的新 Plan（draft 態）；null = 無可行替代方案
+ */
+export async function replan(
+  intent: string,
+  ctx: AgentContext,
+  availableSkills: SkillMetaSlim[],
+  failed: ReplanFailedContext,
+): Promise<Plan | null> {
+  if (isCrisisMessage(intent)) return null;
+  const env = ctx.globals.cloudEnv as string;
+  const t0 = Date.now();
+  const messages = buildPlannerPrompt({
+    userIntent: intent,
+    availableSkills,
+    ctx,
+    failedContext: failed,
+  });
+  ctx.trace.llmCalls += 1;
+  try {
+    const res = await callLLM(env, {
+      messages: messages as LLMMessage[],
+      temperature: 0.3,
+      maxTokens: 1500,
+      jsonMode: true,
+      sessionId: ctx.sessionId,
+    });
+    ctx.trace.totalTokens += res.usage.totalTokens;
+    logInfo(`重規劃耗時 ${Date.now() - t0}ms, tokens=${res.usage.totalTokens}`);
+    const validated = validatePlannerOutput(extractJson(res.text));
+    const planObj = toPlan(validated, intent, `plan_${Date.now()}`);
+    // 空任務 = LLM 判定無可行替代（追問 / 說明走 message），放棄重規劃
+    if (planObj.tasks.length === 0) return null;
+    if (validatePlanBindings(planObj).length > 0) return null;
+    if (!planObj.intent) planObj.intent = intent;
+    applyLocalProfile(planObj, ctx.messages);
+    const clarified = clarifyIfPassengerMissing(planObj);
+    return clarified.tasks.length > 0 ? clarified : null;
+  } catch (e) {
+    logWarn(
+      `重規劃失敗（放棄，維持原失敗語義）：${e instanceof Error ? e.message.slice(0, 80) : '未知'}`,
+    );
+    return null;
+  }
+}
+
+/**
  * 意圖分類（understanding 階段）
  *
  * 2026-10-13 修訂（用戶指令：全量真實調用 LLM）：所有非危機輸入一律
@@ -399,6 +457,28 @@ const ACTION_LABELS: Record<string, string> = {
   cancel_order: '取消訂單',
   chat_companion: '陪伴對話',
   pay_orders: '聚合待支付訂單引導渠道收銀台',
+  dial_phone: '撥打電話',
+  draft_mail: '起草郵件',
+  send_mail: '發送郵件',
+  // 2026-10-14 麥當勞真實下單域（skill.food.mcdonalds）：首個真實交易 SKILL，
+  // 訂單在麥當勞側真實創建（獨立 action 名避免與星巴克 / 票務全局鍵衝突）
+  search_mcd_store: '查詢麥當勞門市',
+  query_mcd_menu: '查詢麥當勞菜單',
+  place_mcd_order: '麥當勞真實下單（待掃碼支付）',
+  query_mcd_order: '查詢麥當勞訂單',
+  cancel_mcd_order: '取消麥當勞訂單',
+  // 2026-10-14 瑞幸真實點單域（skill.coffee.luckin）：訂單在本人瑞幸賬號
+  // 真實創建，掃 payOrderUrl 二維碼支付（需確認後執行）
+  search_luckin_store: '查詢瑞幸門店',
+  search_luckin_product: '搜尋瑞幸商品',
+  place_luckin_order: '瑞幸真實點單（需確認，掃碼支付）',
+  // 2026-10-14 滴滴打車域（skill.ride.didi）：taxi_* 真實派單鏈
+  estimate_ride: '預估打車車型與價格',
+  place_ride: '滴滴真實叫車（需確認）',
+  query_ride: '查詢打車訂單狀態',
+  // 2026-10-14 飛豬旅行域（skill.travel.fliggy）：FlyAI MCP 只讀搜索鏈
+  search_hotels: '搜索目的地酒店',
+  ai_search: '飛豬 AI 旅行推薦',
 };
 
 /**

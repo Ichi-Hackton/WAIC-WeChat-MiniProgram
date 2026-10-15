@@ -64,6 +64,11 @@ export function clearHistory(): void {
   setItem(HISTORY_KEY, []);
 }
 
+/** 清空本機對話訊息（隱私控制中心「清除會話歷史」聯動；與 clearHistory 分離——歷史摘要與訊息明細屬不同存儲鍵） */
+export function clearMessages(): void {
+  setItem('session:messages', []);
+}
+
 /** 把當前會話的 ChatMessage 同步到本機（脫敏版） */
 export function syncMessages(messages: ChatMessage[]): void {
   // 僅保留 role + timestamp + content 前 100 字

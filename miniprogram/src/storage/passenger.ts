@@ -82,6 +82,9 @@ export interface PassengerEntry {
   idNo: string;
   /** 是否默認乘車人（簿內至多一條；下單回填優先取此人） */
   isDefault: boolean;
+  /** 條目來源：manual=表單錄入；conversation=對話捕獲保存（2026-10；
+   *  缺席 = 歷史數據，視同 manual） */
+  source?: 'manual' | 'conversation';
   createdAt: number;
   updatedAt: number;
 }
@@ -134,9 +137,13 @@ export function getPassenger(id: string): PassengerEntry | null {
  * 首條自動設為默認（保證下單回填恆有可帶入人）；
  * 勾選默認時自動取消既有默認，維持簿內默認唯一。
  *
+ * @param source 條目來源（對話捕獲路徑傳 'conversation'；表單錄入缺省 manual）
  * @returns 新條目；容量達上限（PASSENGER_LIMIT）時返回 null
  */
-export function addPassenger(input: PassengerFormInput): PassengerEntry | null {
+export function addPassenger(
+  input: PassengerFormInput,
+  source: PassengerEntry['source'] = 'manual',
+): PassengerEntry | null {
   const book = listPassengers();
   if (book.length >= PASSENGER_LIMIT) return null;
   const now = Date.now();
@@ -145,6 +152,7 @@ export function addPassenger(input: PassengerFormInput): PassengerEntry | null {
     name: input.name.trim(),
     idNo: input.idNo.trim().toUpperCase(),
     isDefault: input.isDefault || book.length === 0,
+    source,
     createdAt: now,
     updatedAt: now,
   };

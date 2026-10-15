@@ -26,6 +26,13 @@ const FIELD_LABELS: Record<string, string> = {
   // 通用查詢
   city: '城市',
   keyword: '關鍵詞',
+  // 設備通訊域（撥打電話 / 發郵件入參；INVALID_INPUT 脱敏文案用）。
+  // to 不在此登記：鍵名與出行域「到達地」衝突且此表為全域單值映射——
+  // 郵件域 to 的缺失 / 格式錯誤由 SKILL 內部校驗兜底（INVALID_EMAIL
+  // 自帶準確中文文案，不走 adapter 的 fieldLabel 路徑）
+  phoneNumber: '電話號碼',
+  subject: '郵件主題',
+  body: '郵件正文',
 };
 
 /**

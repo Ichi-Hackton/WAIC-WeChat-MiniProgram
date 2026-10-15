@@ -59,6 +59,17 @@ export function topQuickPhrases(limit: number): QuickPhrase[] {
     .slice(0, limit);
 }
 
+/** 按原文精確查找話語（例程提議卡判「重複意圖」用；無記錄返回 null） */
+export function findQuickPhrase(text: string): QuickPhrase | null {
+  const hit = getPhrases().find((p) => p.text === text.trim());
+  return hit ?? null;
+}
+
+/** 清空全部話語（隱私控制中心「清除偏好與快捷數據」聯動） */
+export function clearQuickPhrases(): void {
+  setItem(PHRASES_KEY, []);
+}
+
 /** 讀取並窄化（防髒數據：形狀不符的條目靜默丟棄） */
 function getPhrases(): QuickPhrase[] {
   const raw = getItem<unknown>(PHRASES_KEY, []);

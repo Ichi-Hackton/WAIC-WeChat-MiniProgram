@@ -19,8 +19,8 @@ import {
   removePassenger,
   validatePassengerForm,
   PASSENGER_LIMIT,
-  type PassengerFormInput,
 } from '../../src/storage/passenger';
+import type { PassengerFormInput } from '../../src/storage/passenger';
 
 /** 頁面資料結構 */
 interface PassengerEditPageData {

@@ -41,8 +41,11 @@ export interface AddressEntry {
   district: string;
   /** 詳細地址（4-120 字） */
   detail: string;
-  /** 是否默認地址（簿內至多一條；出發城市推斷與將來 checkout 注入優先取此條） */
+  /** 是否默認地址（簿內至多一條；出發城市推斷與 checkout 注入優先取此條） */
   isDefault: boolean;
+  /** 條目來源：manual=表單錄入（含微信導入）；conversation=對話捕獲保存
+   *  （2026-10；缺席 = 歷史數據，視同 manual） */
+  source?: 'manual' | 'conversation';
   createdAt: number;
   updatedAt: number;
 }
@@ -124,9 +127,13 @@ export function getAddress(id: string): AddressEntry | null {
  * 首條自動設為默認（保證出發城市推斷恆有可帶入來源）；
  * 勾選默認時自動取消既有默認，維持簿內默認唯一。
  *
+ * @param source 條目來源（對話捕獲路徑傳 'conversation'；表單 / 微信導入缺省 manual）
  * @returns 新條目；容量達上限（ADDRESS_LIMIT）時返回 null
  */
-export function addAddress(input: AddressFormInput): AddressEntry | null {
+export function addAddress(
+  input: AddressFormInput,
+  source: AddressEntry['source'] = 'manual',
+): AddressEntry | null {
   const book = listAddresses();
   if (book.length >= ADDRESS_LIMIT) return null;
   const now = Date.now();
@@ -139,6 +146,7 @@ export function addAddress(input: AddressFormInput): AddressEntry | null {
     district: input.district,
     detail: input.detail.trim(),
     isDefault: input.isDefault || book.length === 0,
+    source,
     createdAt: now,
     updatedAt: now,
   };

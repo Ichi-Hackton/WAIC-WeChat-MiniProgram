@@ -22,6 +22,7 @@
           <view class="row-title-line">
             <text class="row-title">{{item.name}}</text>
             <view wx:if="{{item.isDefault}}" class="badge">默認</view>
+            <view wx:if="{{item.sourceTag}}" class="badge badge-src">{{item.sourceTag}}</view>
           </view>
           <text class="row-sub">{{item.idNoMasked}}</text>
         </view>
@@ -62,6 +63,7 @@
             <text class="row-title">{{item.receiverName}}</text>
             <text class="row-title-sub">{{item.phoneMasked}}</text>
             <view wx:if="{{item.isDefault}}" class="badge">默認</view>
+            <view wx:if="{{item.sourceTag}}" class="badge badge-src">{{item.sourceTag}}</view>
           </view>
           <text class="row-sub">{{item.regionLine}}</text>
           <text class="row-sub">{{item.detail}}</text>
@@ -71,6 +73,101 @@
     </view>
   </view>
 
+  <!-- ═══ 郵箱帳戶（發送郵件自有發件通道；授權碼本地加密存儲）═══ -->
+  <view class="section section-late">
+    <view class="section-head">
+      <text class="section-title">郵箱帳戶</text>
+      <view class="section-add" hover-class="btn-hover" bindtap="onBindMail">{{mailBound ? '編輯' : '＋ 綁定'}}</view>
+    </view>
+    <view class="list-card">
+      <view wx:if="{{!mailBound}}" class="empty-hint">
+        尚未綁定郵箱。綁定後說「發郵件到 xx@xx.com」將直接以你的郵箱真實發出；未綁定時為複製內容引導手動發送。
+      </view>
+      <view
+        wx:else
+        class="list-row"
+        hover-class="row-hover"
+        bindtap="onBindMail"
+      >
+        <view class="row-main">
+          <view class="row-title-line">
+            <text class="row-title">{{mailEmailMasked}}</text>
+            <view class="badge">已綁定</view>
+          </view>
+          <text class="row-sub">{{mailSmtpLine}}　發送郵件時自動以此帳號發出</text>
+        </view>
+        <text class="row-arrow">›</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- ═══ 技能權限（第二梯隊·項B，借鑑 Muse / Dots：寫操作確認檔位用戶可控）═══ -->
+  <view class="section section-late">
+    <view class="section-head">
+      <text class="section-title">技能權限</text>
+    </view>
+    <view class="empty-hint">對含下單 / 點單 / 發送等寫操作的技能域，可單獨調整確認檔位：跟隨技能聲明 / 自動執行 / 每次確認（聊天流確認卡）。下一輪執行生效。</view>
+    <view class="list-card">
+      <picker
+        wx:for="{{permSkills}}"
+        wx:key="skillId"
+        range="{{['跟隨技能聲明', '自動執行', '每次確認']}}"
+        value="{{item.tier === 'confirm' ? 2 : (item.tier === 'auto' ? 1 : 0)}}"
+        data-skill-id="{{item.skillId}}"
+        bindchange="onTierChange"
+      >
+        <view class="list-row" hover-class="row-hover">
+          <view class="row-main">
+            <view class="row-title-line">
+              <text class="row-title">{{item.name}}</text>
+            </view>
+            <text class="row-sub">寫操作確認檔位</text>
+          </view>
+          <text class="row-tier">{{item.tierLabel}} ›</text>
+        </view>
+      </picker>
+    </view>
+  </view>
+
+  <!-- ═══ 執行記錄（第二梯隊·項E，借鑑 Dots Activity：Agent 替我做了什麼，本機留痕）═══ -->
+  <view class="section section-late">
+    <view class="section-head">
+      <text class="section-title">執行記錄</text>
+    </view>
+    <view class="list-card">
+      <view wx:if="{{activities.length === 0}}" class="empty-hint">
+        尚無執行記錄。每輪任務結束後在此留痕（意圖摘要 + 結果 + 任務標籤），僅存本機，隨「清除會話歷史」一併歸零。
+      </view>
+      <view
+        wx:for="{{activities}}"
+        wx:key="key"
+        class="list-row"
+      >
+        <view class="row-main">
+          <view class="row-title-line">
+            <text class="row-title act-intent">{{item.intent}}</text>
+            <view class="badge {{item.outcome === 'completed' ? '' : item.outcome === 'mixed' ? 'badge-mixed' : 'badge-fail'}}">{{item.outcomeLabel}}</view>
+          </view>
+          <text wx:if="{{item.labelsLine}}" class="row-sub">{{item.labelsLine}}</text>
+        </view>
+        <text class="act-time">{{item.timeLabel}}</text>
+      </view>
+    </view>
+  </view>
+
+  <!-- ═══ 隱私與數據（項5：會話 / 偏好可清除，數據可導出——個人信息長期存儲須用戶可控）═══ -->
+  <view class="section section-late">
+    <view class="section-head">
+      <text class="section-title">隱私與數據</text>
+    </view>
+    <view class="privacy-actions">
+      <view class="privacy-btn" hover-class="btn-hover" bindtap="onClearSession">清除會話歷史</view>
+      <view class="privacy-btn" hover-class="btn-hover" bindtap="onClearPrefs">清除偏好與快捷數據</view>
+      <view class="privacy-btn privacy-btn-export" hover-class="btn-hover" bindtap="onExportData">導出我的數據</view>
+    </view>
+    <view class="empty-hint">會話訊息僅存於本機，可隨時清除；導出數據為脱敏 JSON（證號 / 手機號已遮罩），複製到剪貼板後可自行轉存。</view>
+  </view>
+
   <!-- 隱私說明（§ 10 紅線：個人敏感信息僅存本機） -->
-  <text class="privacy-hint">證件與地址信息僅存於本機，用於下單自動帶入與出行規劃出發城市推斷，不上傳雲端。</text>
+  <text class="privacy-hint">證件與地址信息僅存於本機，用於下單自動帶入與出行規劃出發城市推斷，不上傳雲端。郵箱授權碼加密存於本機，僅在發送郵件時經雲托管加密通道透傳，不留存於雲端。</text>
 </view>

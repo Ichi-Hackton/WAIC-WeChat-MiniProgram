@@ -24,17 +24,34 @@ import { taskLabel } from '../../src/llm/client';
 import { info as logInfo, error as logError } from '../../src/utils/logger';
 import { isVoiceAvailable, startVoiceRecognition } from '../../src/interaction/voice';
 import { renderTaskFallback, toCardLines } from '../../src/interaction/card-render';
+import { buildDynamicDisplayCard } from '../../src/interaction/dynamic-card';
+import type { DynamicDisplayCard } from '../../src/interaction/dynamic-card';
+import type { CheckpointCardPayload, CheckpointRespond } from '../../src/types/checkpoint';
 import { dueTodayTrips, markReminded } from '../../src/storage/trip';
-import { recordQuickPhrase, topQuickPhrases } from '../../src/storage/quick-phrases';
+import { appendActivity } from '../../src/storage/activity';
+import { recordQuickPhrase, topQuickPhrases, findQuickPhrase } from '../../src/storage/quick-phrases';
+import {
+  listRoutines,
+  addRoutine,
+  removeRoutine,
+  touchRoutine,
+  hasRoutineText,
+  dismissRoutineText,
+  isRoutineDismissed,
+} from '../../src/storage/routines';
 import { getItem, setItem } from '../../src/services/storage';
 import { recordEvent } from '../../src/services/metrics';
 import { jumpExternal } from '../../src/services/jump';
+import { createMonitor } from '../../src/services/monitors';
+import { upsertMonitor } from '../../src/storage/monitors';
+import { DYN_SKILL_PREFIX } from '../../src/skills/dynamic';
 import { METRIC_NAMES } from '../../src/utils/metrics';
 import type { MetricName } from '../../src/utils/metrics';
-import { CLOUD_ENV, EMBEDDED_JUMP_APPIDS } from '../../src/app';
+import { CLOUD_ENV, EMBEDDED_JUMP_APPIDS, SUBSCRIBE_TMPL_TICKET_MONITOR } from '../../src/app';
 import type { VoiceRecognitionSession } from '../../src/interaction/voice';
 import type { AgentRuntime } from '../../src/app';
 import type { AgentState } from '../../src/types/agent-state';
+import type { ProfileProposalEntry } from '../../src/types/agent-state';
 import type { Plan } from '../../src/types/plan';
 import type { Task } from '../../src/types/task';
 
@@ -132,9 +149,9 @@ interface WeatherCard extends CardKey {
   condition: string;
   /** 大字溫度「25°」 */
   tempLabel: string;
-  /** 明細行（濕度 / 風況 / 發布時間） */
+  /** 明細行（濕度 / 風力 / 發布時間） */
   lines: Array<{ label: string; value: string }>;
-  /** 數據源標籤（中國天氣網 / 模擬數據） */
+  /** 數據源標籤（高德實時 / 模擬數據） */
   sourceLabel: string;
   /** 是否即時數據（決定標籤配色） */
   sourceReal: boolean;
@@ -169,7 +186,93 @@ interface MemoryCard extends CardKey {
   status: 'pending' | 'confirmed' | 'dismissed';
 }
 
-type AnyCard = TrainCard | FlightCard | JumpCard | WeatherCard | GenericCard | PlanCard | MemoryCard;
+/** 個人資料保存卡（對話捕獲，2026-10）：推斷提議確認卡（suggested，
+ * 「保存到乘車人簿 / 地址簿？」）、顯式已保存回執（remembered，無按鈕）
+ * 與校驗未過告知（invalid，無按鈕引導手動補錄）——點「保存」以卡面
+ * 條目回傳落盤（所見即所寫；證號卡面脫敏為展示策略） */
+interface ProfileCard extends CardKey {
+  type: 'profile';
+  /** 提議條目（lines 為卡面展示行；input 攜完整保存輸入供確認回傳） */
+  entries: ProfileProposalEntry[];
+  /** pending=待確認（顯示按鈕）；confirmed / dismissed=已處理終態；
+ * 純 remembered / invalid 條目直接以 confirmed 態透出（無按鈕） */
+  status: 'pending' | 'confirmed' | 'dismissed';
+}
+
+/** 能力缺口提案卡（規劃缺口 → 引導鍛造）：技能名 + 建議 + 「去技能
+ *  中心起草」入口——點擊跳轉技能中心並預填需求（提交前確認去敏語義，
+ *  計劃紅線：缺口只產生提案，不自動發送 forge） */
+interface GapCard extends CardKey {
+  type: 'gap';
+  /** 缺失能力名（如「書價比較」） */
+  skillName: string;
+  /** 建議描述（如何描述需求以鍛造補齊） */
+  suggestion: string;
+  /** 預填鍛造需求（導航參數） */
+  intent: string;
+}
+
+/** 動態技能交付卡（受控展示協議，形狀由 interaction/dynamic-card 定義：
+ *  display 標題/明細行 + AI 生成標識；不暴露 raw JSON） */
+type DynamicCard = DynamicDisplayCard;
+
+/** 例程提議卡（快捷例程，2026-10 第一梯隊·項2）：重複意圖完成後提議
+ *  固化——「存例程」落盤（首頁例程區一鍵觸發）、「不用了」丟棄且同話語
+ *  不再重複提議（推斷須徵求同意，與偏好分層記憶同口徑） */
+interface RoutineSaveCard extends CardKey {
+  type: 'routine-save';
+  /** 用戶原話（固化後例程的觸發口令） */
+  text: string;
+  /** 任務序列摘要（成功任務中文標籤以 → 連接，展示「這會做什麼」） */
+  label: string;
+  /** pending=待確認（顯示按鈕）；confirmed / dismissed=已處理終態 */
+  status: 'pending' | 'confirmed' | 'dismissed';
+}
+
+/** 執行工作面板卡（三態步驟卡，2026-10 第一梯隊·項4，借鑑 Spark 工作
+ *  面板）：Plan 任務群的全域進度頭卡——進度條 + 階段文案 + 統計行，
+ *  插在計劃步驟卡首位，隨任務事件就地更新（統計由同消息內步驟卡狀態推算） */
+interface PanelCard extends CardKey {
+  type: 'panel';
+  /** 關聯 Plan ID（跨輪隔離，同 activePlanId 理由） */
+  planId: string;
+  /** 總步驟數 */
+  total: number;
+  /** 已連終態步驟數（成功 + 失敗 + 跳過 + 已回滾） */
+  done: number;
+  /** 進行中步驟數（執行中 + 待確認） */
+  running: number;
+  /** 失敗步驟數 */
+  failed: number;
+  /** 進度百分比（0-100，終態佔比） */
+  percent: number;
+  /** 階段文案（排隊中 / 正在執行 / 已全部完成 / 部分步驟未完成） */
+  phaseLabel: string;
+}
+
+/** 寫操作確認卡（第二梯隊·項C，借鑑 Muse 審批卡）：requiresHumanConfirm /
+ *  域級 confirm 檔位的寫操作在對話流內出結構化確認卡——脱敏明細 + 雙按鈕，
+ *  點按後經 checkpointResponders 登記的應答句柄回傳（留在聊天流提供審計
+ *  能見度：用戶可回看當時確認了什麼；卡片天然可並存，無彈窗互頂問題） */
+interface ConfirmCard extends CardKey {
+  type: 'confirm';
+  /** 卡片標題（如「請確認：發送郵件到 xx@xx.com」） */
+  title: string;
+  /** 技能中文名 */
+  skillName: string;
+  /** 脱敏明細行（逐行渲染：入參中文標籤行 / 金額明細） */
+  detailLines: string[];
+  /** 確認按鈕文案（如「確認發送」） */
+  confirmText: string;
+  /** pending=待確認（顯示按鈕）；approved / rejected=已處理終態（回執文案） */
+  status: 'pending' | 'approved' | 'rejected';
+}
+
+type AnyCard = TrainCard | FlightCard | JumpCard | WeatherCard | GenericCard | PlanCard | MemoryCard | ProfileCard | GapCard | DynamicCard | RoutineSaveCard | PanelCard | ConfirmCard;
+
+/** 確認卡應答句柄登記（消息 ID → respond；函式不可序列化，不入 data，
+ *  頁面卸載時全部拒絕出清——fail-closed） */
+const checkpointResponders = new Map<string, CheckpointRespond>();
 
 /* ============ 基礎模型 ============ */
 
@@ -213,6 +316,8 @@ interface HomePageData {
   exampleChips: Array<{ text: string; label: string }>;
   /** 快捷入口標題（常用話語「你常問的：」/ 出廠範例「我可以幫你辦：」） */
   chipsTitle: string;
+  /** 例程 chips（快捷例程入口；id 用於長按刪除，text 為點擊發送口令，label 為流程摘要） */
+  routineChips: Array<{ id: string; text: string; label: string }>;
   [key: string]: unknown;
 }
 
@@ -226,6 +331,8 @@ interface HomePageThis {
   activePlanId: string;
   /** 本輪成功任務 ID 集（收尾「卡片即結論」判定用；同一任務事件多次觸發，Set 去重） */
   succeededTaskIds: Set<string>;
+  /** 本輪成功任務的中文標籤序列（例程提議卡的流程摘要數據源） */
+  succeededTaskLabels: string[];
   /** 本輪已渲染交付卡的任務 ID 集 */
   deliveredTaskIds: Set<string>;
   /** runtime 事件退訂函數 */
@@ -239,6 +346,14 @@ interface HomePageThis {
   onAgentStateChange: (state: AgentState) => void;
   onAgentPlanUpdate: (plan: Plan) => void;
   onAgentTaskUpdate: (task: Task) => void;
+  /** runtime 事件：寫操作確認請求（項C確認卡；應答句柄按消息 ID 登記） */
+  onAgentCheckpointRequest: (payload: CheckpointCardPayload, respond: CheckpointRespond) => void;
+  /** 確認卡「確認」按鈕 */
+  onApproveCheckpoint: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
+  /** 確認卡「取消」按鈕 */
+  onRejectCheckpoint: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
+  /** 內部：就地更新確認卡狀態（僅 pending 態卡片會被更新） */
+  updateConfirmCardStatus: (msgId: string, status: 'approved' | 'rejected') => void;
   appendResultCard: (task: Task) => void;
   dispatch: (intent: string) => Promise<void>;
   onSend: () => Promise<void>;
@@ -246,12 +361,18 @@ interface HomePageThis {
   onInput: (e: { detail: { value: string } }) => void;
   onTapExample: (e: { currentTarget?: { dataset?: { text?: string } } }) => Promise<void>;
   onTapBookTrain: (e: { currentTarget?: { dataset?: { trainNo?: string; ctx?: string } } }) => Promise<void>;
+  /** 售罄車次行「監控」：創建餘票條件監控（第二梯隊·項A） */
+  onMonitorTrain: (e: { currentTarget?: { dataset?: { trainNo?: string; ctx?: string } } }) => Promise<void>;
   onTapBookFlight: (e: { currentTarget?: { dataset?: { flightNo?: string; ctx?: string } } }) => Promise<void>;
   onTapCopyJumpInfo: (e: { currentTarget?: { dataset?: { text?: string } } }) => void;
   onTapJumpMini: (e: { currentTarget?: { dataset?: { appid?: string; path?: string } } }) => void;
   onTapProfile: () => void;
   /** 頂部「行程」入口：前往行程頁瀏覽已規劃行程的時間線 */
   onTapTrips: () => void;
+  /** 頂部「技能」入口：前往技能中心（鍛造 / 提案 / 公開技能 / 審批） */
+  onTapSkillCenter: () => void;
+  /** 缺口卡「去技能中心起草」：帶意圖預填鍛造需求（缺口引導閉環） */
+  onTapForgeGap: (e: { currentTarget?: { dataset?: { intent?: string } } }) => void;
   /** 到點提醒：檢查今日到期行程並以助理氣泡提醒（同日同行程僅一次） */
   remindDueTrips: () => void;
   onTapReset: () => void;
@@ -259,8 +380,25 @@ interface HomePageThis {
   onConfirmMemory: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
   /** 記憶確認卡「不用了」：丟棄提議（同鍵同值不再重複詢問）+ 卡片轉已取消態 */
   onDismissMemory: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
+  /** 例程提議卡「存例程」：話語 + 流程序列固化落盤 + 刷新例程 chips */
+  onConfirmRoutine: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
+  /** 例程提議卡「不用了」：丟棄提議（同話語不再重複詢問）+ 卡片轉已取消態 */
+  onDismissRoutine: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
+  /** 例程 chip 點擊：刷新新鮮度後以口令進入 dispatch（規劃仍走全鏈路） */
+  onTapRoutine: (e: { currentTarget?: { dataset?: { id?: string; text?: string } } }) => Promise<void>;
+  /** 例程 chip 長按：確認後刪除例程 */
+  onLongPressRoutine: (e: { currentTarget?: { dataset?: { id?: string } } }) => void;
+  /** 內部：就地更新例程提議卡狀態（以消息 ID 定位，僅更新 pending 卡） */
+  updateRoutineCard: (msgId: string, status: 'confirmed' | 'dismissed') => void;
+  /** 個人資料保存卡「保存」：以卡面 suggested 條目回傳落盤（所見即所寫）
+ * + 卡片轉已保存態（僅 pending 卡可點） */
+  onConfirmProfile: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
+  /** 個人資料保存卡「不用了」：丟棄提議（同鍵同值不再重複詢問）+ 卡片轉已取消態 */
+  onDismissProfile: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
   /** 內部：就地更新記憶確認卡狀態（以消息 ID 定位，僅更新 pending 卡） */
   updateMemoryCard: (msgId: string, status: 'confirmed' | 'dismissed') => void;
+  /** 內部：就地更新個人資料保存卡狀態（以消息 ID 定位，僅更新 pending 卡） */
+  updateProfileCard: (msgId: string, status: 'confirmed' | 'dismissed') => void;
 }
 
 /** Agent 回應形狀 */
@@ -271,6 +409,13 @@ interface AgentRespShape {
   /** 記憶卡提議（可選，AgentResponse.memoryProposal 的頁面側形狀）：
    * remembered=已直接記住的回執條目；suggested=待確認推斷提議 */
   memoryProposal?: Array<{ key: string; label: string; value: string; status: 'suggested' | 'remembered' }>;
+  /** 個人資料保存提議（可選，AgentResponse.profileProposal 的頁面側
+   * 形狀，對話捕獲）：remembered=顯式已保存回執；suggested=待確認
+   * 推斷提議；invalid=校驗未過告知 */
+  profileProposal?: ProfileProposalEntry[];
+  /** 能力缺口（規劃器判定無可用技能，AgentResponse.capabilityGap 的頁面側
+   *  形狀）：頁面據此渲染 GapCard 引導前往技能中心鍛造 */
+  capabilityGap?: { intent: string; skillName: string; suggestion: string };
   errorCode?: string;
 }
 
@@ -353,6 +498,106 @@ function buildExampleChips(): Pick<HomePageData, 'exampleChips' | 'chipsTitle'> 
     })),
     chipsTitle: '你常問的：',
   };
+}
+
+/* ============ 掃碼帶參預填（2026-10 第一梯隊·項3，借鑑 Cue 掃碼喚起） ============ */
+
+/** 安全解碼（容錯：非法轉義序列原樣返回） */
+function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+/** 從 scene / q 源解析意圖文本（intent= 參數優先，純文本兜底） */
+function parseScanSource(raw: string): string {
+  const text = safeDecode(raw);
+  const m = text.match(/(?:^|[?&])intent=([^&]+)/);
+  if (m) return safeDecode(m[1]);
+  return text;
+}
+
+/**
+ * 掃碼帶參 → 意圖文本（點餐 / 排隊場景直連入口）
+ *
+ * 三來源優先級：intent 直取 > scene（場景值，約定 intent= 前缀或純文本）
+ * > q（二維碼原始鏈接，解碼後解析 intent= 參數）。
+ *
+ * 信任最小化：掃碼參數屬不可信外部輸入——僅預填輸入框並以助理氣泡
+ * 提示，不自動 dispatch（由用戶核對後手動發送，避免惡意二維碼直接
+ * 觸發下單類寫操作）。清洗：去控制字符、壓縮空白、截斷 100 字。
+ */
+function resolveScanIntent(options?: Record<string, string | undefined>): string {
+  if (!options) return '';
+  let raw = '';
+  if (typeof options.intent === 'string' && options.intent) {
+    raw = safeDecode(options.intent);
+  } else if (typeof options.scene === 'string' && options.scene) {
+    raw = parseScanSource(options.scene);
+  } else if (typeof options.q === 'string' && options.q) {
+    raw = parseScanSource(options.q);
+  }
+  return raw
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 100);
+}
+
+/* ============ 例程 chips（2026-10 第一梯隊·項2） ============ */
+
+/** 依例程儲存構造例程入口（最近使用在前，上限與快捷入口對齊；無例程時為空陣列不渲染） */
+function buildRoutineChips(): Pick<HomePageData, 'routineChips'> {
+  return {
+    routineChips: listRoutines().slice(0, CHIPS_LIMIT).map((r) => ({
+      id: r.id,
+      text: r.text,
+      label: r.label.length > CHIP_LABEL_MAX ? `${r.label.slice(0, CHIP_LABEL_MAX)}…` : r.label,
+    })),
+  };
+}
+
+/* ============ 執行工作面板卡（2026-10 第一梯隊·項4） ============ */
+
+/** Plan 生成時構造面板頭卡（初始排隊中態，隨任務事件就地更新） */
+function buildPanelCard(plan: Plan): PanelCard {
+  return {
+    type: 'panel',
+    key: `panel-${plan.id}`,
+    planId: plan.id,
+    total: plan.tasks.length,
+    done: 0,
+    running: 0,
+    failed: 0,
+    percent: 0,
+    phaseLabel: '排隊中',
+  };
+}
+
+/**
+ * 面板卡統計刷新（由同消息內步驟卡狀態推算，無需持有 Plan 對象）
+ *
+ * 推算口徑：終態 = 成功 + 失敗 + 跳過 + 已回滾（進度百分比口徑）；
+ * 階段文案優先級：有失敗 > 有進行中 > 全部終態 > 排隊中。
+ */
+function refreshPanelCard(panel: PanelCard, cards: AnyCard[]): PanelCard {
+  const steps = cards.filter(
+    (c): c is PlanCard =>
+      c.type === 'plan' && (c.payload as { planId?: string }).planId === panel.planId,
+  );
+  const total = steps.length || panel.total;
+  const statusOf = (s: PlanCard) => String((s.payload as { status?: string }).status ?? '');
+  const done = steps.filter((s) =>
+    ['succeeded', 'failed', 'skipped', 'rolled_back'].includes(statusOf(s)),
+  ).length;
+  const running = steps.filter((s) => ['running', 'waiting_human'].includes(statusOf(s))).length;
+  const failed = steps.filter((s) => statusOf(s) === 'failed').length;
+  const percent = total > 0 ? Math.round((done / total) * 100) : 0;
+  const phaseLabel =
+    failed > 0 ? '部分步驟未完成' : running > 0 ? '正在執行' : done === total ? '已全部完成' : '排隊中';
+  return { ...panel, total, done, running, failed, percent, phaseLabel };
 }
 
 /**
@@ -438,8 +683,8 @@ function buildTrainCard(data: unknown): TrainCard | null {
     routeFrom: String(d.from ?? ''),
     routeTo: String(d.to ?? ''),
     routeDate: String(d.date ?? ''),
-    sourceLabel: d.source === '12306_realtime' ? '12306 即時' : '模擬數據',
-    sourceReal: d.source === '12306_realtime',
+    sourceLabel: d.source === '12306_realtime' || d.source === 'tripmatch_realtime' ? '12306 即時' : '模擬數據',
+    sourceReal: d.source === '12306_realtime' || d.source === 'tripmatch_realtime',
     trains,
     moreLabel: d.trains.length > shown.length ? `共 ${d.trains.length} 班 · 顯示前 ${shown.length} 班` : `共 ${d.trains.length} 班`,
     // 快捷預訂上下文：發送「預訂 2026-10-04 北京到上海的G531次高鐵二等座」
@@ -546,11 +791,11 @@ function fmtDistance(m: unknown): string {
 }
 
 /** search_poi 成功 → 附近地點清單卡（前五家，按距離升序；零結果時未找到提示卡）
- *  數據源標籤（title 後綴）區分即時（騰訊位置服務 / 天地圖雙上游）/ 模擬數據，不誤導用戶 */
+ *  數據源標籤（title 後綴）區分即時（高德 / 天地圖雙上游）/ 模擬數據，不誤導用戶 */
 function buildPoiCard(data: unknown): GenericCard | null {
   const d = data as { keyword?: unknown; pois?: unknown; radiusM?: unknown; source?: unknown } | undefined;
   const kw = typeof d?.keyword === 'string' && d.keyword ? d.keyword : '地點';
-  // 雲端雙上游（tencent_lbs / tianditu）皆為即時數據，僅 mock 來自小程序端降級
+  // 雲端雙上游（amap / tianditu）皆為即時數據，僅 mock 來自小程序端降級
   const sourceTag = d?.source === 'mock' ? '（模擬數據）' : '';
   const pois = Array.isArray(d?.pois) ? (d?.pois as Array<Record<string, unknown>>) : [];
   if (pois.length === 0) {
@@ -604,6 +849,238 @@ function buildCoffeeOrderCard(data: unknown): JumpCard | null {
     ...(jump.appId
       ? { jumpBtn: { appId: jump.appId, path: jump.jCommand || jump.path, label: '前往星巴克下單' } }
       : {}),
+  };
+}
+
+/** query_mcd_menu 成功 → 菜單分類卡（各分類首幾個餐品描述；code 為下單編碼不在卡面暴露） */
+function buildMcdMenuCard(data: unknown): GenericCard | null {
+  const d = data as { categories?: unknown } | undefined;
+  const cats = Array.isArray(d?.categories) ? (d?.categories as Array<Record<string, unknown>>) : [];
+  if (cats.length === 0) return null;
+  const lines = cats.slice(0, 4).map((c, i) => {
+    const meals = Array.isArray(c.meals) ? (c.meals as Array<Record<string, unknown>>) : [];
+    const names = meals
+      .slice(0, 3)
+      .map((m) => {
+        const tags = Array.isArray(m.tags) ? (m.tags as unknown[]) : [];
+        return tags.length > 0 ? String(tags[0]) : `餐品 ${i + 1}`;
+      })
+      .join('、');
+    return { label: asText(c.name) || `分類 ${i + 1}`, value: names || '暫無餐品' };
+  });
+  return {
+    type: 'generic',
+    key: `mcd-menu-${cats.length}-${asText(cats[0]?.name)}`,
+    title: '麥當勞菜單（節選）',
+    lines,
+  };
+}
+
+/** place_mcd_order 成功 → 真實訂單卡（訂單已在麥當勞側真實創建；複製支付鏈接掃碼支付） */
+function buildMcdOrderCard(data: unknown): JumpCard | null {
+  const d = data as {
+    orderId?: unknown;
+    mcdOrderId?: unknown;
+    items?: unknown;
+    amountCent?: unknown;
+    takeWay?: unknown;
+    autoPicked?: unknown;
+    payUrl?: unknown;
+    status?: unknown;
+  } | undefined;
+  if (!d || typeof d.orderId !== 'string') return null;
+  const items = Array.isArray(d.items) ? (d.items as Array<Record<string, unknown>>) : [];
+  const amountCent = asCents(d.amountCent);
+  const payUrl = typeof d.payUrl === 'string' ? d.payUrl : '';
+  const detail =
+    items.map((it) => `${asText(it.productName)} ×${typeof it.quantity === 'number' ? it.quantity : 1}`).join('、') ||
+    '麥當勞點餐';
+  return {
+    type: 'jump',
+    key: `mcd-${d.orderId}`,
+    title: '麥當勞訂單已創建（真實訂單）',
+    lines: [
+      { label: '明細', value: detail },
+      ...(d.autoPicked === true ? [{ label: '選品', value: '自動選人氣熱賣（可取消後指定餐品）' }] : []),
+      { label: '合計', value: formatPrice(amountCent), highlight: true },
+      { label: '取餐', value: asText(d.takeWay) || '店內' },
+      { label: '訂單號', value: d.orderId },
+      ...(payUrl ? [{ label: '支付', value: '已附支付鏈接（複製後瀏覽器 / 微信打開）' }] : []),
+    ],
+    note: payUrl
+      ? '訂單已在麥當勞側真實創建（未支付）；複製支付鏈接完成支付，未支付前可說「取消麥當勞訂單」撤銷'
+      : '訂單已在麥當勞側真實創建（未支付）；請至麥當勞 App / 小程序完成支付，未支付前可取消',
+    // copyText 優先攜帶支付鏈接（掃碼支付唯一入口）；無鏈接時複製訂單摘要
+    copyText: payUrl || `麥當勞訂單 ${d.mcdOrderId ?? d.orderId} ${detail} ¥${(amountCent / 100).toFixed(2)}`,
+  };
+}
+
+/** search_luckin_product 成功 → 商品價格卡（瑞幸 priceText 為展示字串，與商城 priceCent 不同構） */
+function buildLuckinProductsCard(data: unknown): GenericCard | null {
+  const d = data as { products?: unknown } | undefined;
+  const products = Array.isArray(d?.products) ? (d?.products as Array<Record<string, unknown>>) : [];
+  if (products.length === 0) return null;
+  const lines = products.slice(0, 3).map((p, i) => ({
+    label: `商品 ${i + 1}`,
+    value: `${asText(p.name)} ${asText(p.priceText)}`,
+  }));
+  return {
+    type: 'generic',
+    key: `lkn-products-${products.length}-${asText(products[0]?.productId)}`,
+    title: '瑞幸商品搜尋結果',
+    lines,
+  };
+}
+
+/** place_luckin_order 成功 → 瑞幸真實訂單卡（掃碼支付或跳轉小程序完成） */
+function buildLuckinOrderCard(data: unknown): JumpCard | null {
+  const d = data as {
+    orderId?: unknown;
+    items?: unknown;
+    payOrderUrl?: unknown;
+    status?: unknown;
+    jump?: unknown;
+    source?: unknown;
+  } | undefined;
+  if (!d || typeof d.orderId !== 'string') return null;
+  const items = Array.isArray(d.items) ? (d.items as Array<Record<string, unknown>>) : [];
+  const detail = items.map((it) => `${asText(it.name)} ×${typeof it.quantity === 'number' ? it.quantity : 1}`).join('、') || '瑞幸點單';
+  const payUrl = typeof d.payOrderUrl === 'string' ? d.payOrderUrl : '';
+  const jump = asJump(d.jump);
+  const isReal = typeof d.source === 'string' && d.source.includes('realtime');
+  return {
+    type: 'jump',
+    key: `lkn-${d.orderId}`,
+    title: isReal ? '瑞幸訂單已創建（真實訂單）' : '瑞幸點單需求卡已生成',
+    lines: [
+      { label: '明細', value: detail },
+      { label: '狀態', value: d.status === 'completed' ? '已完成' : d.status === 'cancelled' ? '已取消' : '待支付' },
+      { label: '訂單號', value: d.orderId },
+      ...(payUrl ? [{ label: '支付', value: '已附支付鏈接（複製後瀏覽器 / 微信打開）' }] : []),
+    ],
+    note: payUrl
+      ? '訂單已在本人瑞幸賬號真實創建（未支付）；複製支付鏈接掃碼支付，逾期自動取消'
+      : '真實點單於瑞幸小程序完成，價格與優惠以門市為準',
+    // 真實單優先携帶支付鏈接；降級路徑用雲端 jump 包的 copyText
+    copyText: payUrl || jump.copyText || `瑞幸點單 ${detail}`,
+    ...(jump.appId
+      ? { jumpBtn: { appId: jump.appId, path: jump.jCommand || jump.path, label: '前往瑞幸下單' } }
+      : {}),
+  };
+}
+
+/** estimate_ride 成功 → 車型價格預估卡 */
+function buildRideEstimateCard(data: unknown): GenericCard | null {
+  const d = data as { from?: { name?: unknown }; to?: { name?: unknown }; options?: unknown } | undefined;
+  const options = Array.isArray(d?.options) ? (d?.options as Array<Record<string, unknown>>) : [];
+  if (options.length === 0) return null;
+  const fromName = asText(d?.from?.name);
+  const toName = asText(d?.to?.name);
+  const lines = options.slice(0, 3).map((o, i) => ({
+    label: `車型 ${i + 1}`,
+    value: `${asText(o.productName)}（${asText(o.priceText)}）`,
+  }));
+  return {
+    type: 'generic',
+    key: `ride-estimate-${fromName}-${toName}-${options.length}`,
+    title: `打車預估：${fromName} → ${toName}`,
+    lines,
+  };
+}
+
+/** place_ride 成功 → 打車訂單卡（司機信息由 query_ride 輪詢補充） */
+function buildRideOrderCard(data: unknown): GenericCard | null {
+  const d = data as {
+    orderId?: unknown;
+    fromName?: unknown;
+    toName?: unknown;
+    productName?: unknown;
+    status?: unknown;
+    source?: unknown;
+  } | undefined;
+  if (!d || typeof d.orderId !== 'string') return null;
+  const isReal = typeof d.source === 'string' && d.source.includes('realtime');
+  return {
+    type: 'generic',
+    key: `ride-${d.orderId}`,
+    title: isReal ? '滴滴訂單已創建（真實派單）' : '打車訂單（演示）',
+    lines: [
+      { label: '行程', value: `${asText(d.fromName) || '當前位置'} → ${asText(d.toName)}` },
+      { label: '車型', value: asText(d.productName) || '快車' },
+      { label: '狀態', value: d.status === 'completed' ? '已完成' : '待接單' },
+      { label: '訂單號', value: d.orderId },
+    ],
+  };
+}
+
+/** query_ride 成功 → 打車狀態卡（司機 / 車牌 / 距離 / ETA） */
+function buildRideQueryCard(data: unknown): GenericCard | null {
+  const d = data as {
+    orderId?: unknown;
+    statusText?: unknown;
+    driver?: { name?: unknown; carModel?: unknown; carPlate?: unknown } | null;
+    driverDistanceKm?: unknown;
+    etaMin?: unknown;
+  } | undefined;
+  if (!d || typeof d.orderId !== 'string') return null;
+  const drv = d.driver && typeof d.driver === 'object' ? d.driver : null;
+  return {
+    type: 'generic',
+    key: `ride-query-${d.orderId}-${asText(d.statusText)}`,
+    title: '打車訂單狀態',
+    lines: [
+      { label: '狀態', value: asText(d.statusText) || '查詢中' },
+      ...(drv
+        ? [
+            { label: '司機', value: `${asText(drv.name)} ${asText(drv.carModel)}`.trim() },
+            { label: '車牌', value: asText(drv.carPlate) },
+          ]
+        : []),
+      ...(typeof d.driverDistanceKm === 'string' && d.driverDistanceKm
+        ? [{ label: '距離', value: `${d.driverDistanceKm} 公里` }]
+        : []),
+      ...(typeof d.etaMin === 'string' && d.etaMin ? [{ label: 'ETA', value: `${d.etaMin} 分鐘` }] : []),
+    ],
+  };
+}
+
+/** search_hotels 成功 → 飛豬酒店清單卡（前四家：名稱 / 價格 / 檔次 / 鄰近地標；
+ *  體驗模式 notice 在標題標註「價格脫敏」，避免用戶誤解 ¥5xx 為精確價） */
+function buildFliggyHotelsCard(data: unknown): GenericCard | null {
+  const d = data as { hotels?: unknown; notice?: unknown } | undefined;
+  const hotels = Array.isArray(d?.hotels) ? (d?.hotels as Array<Record<string, unknown>>) : [];
+  if (hotels.length === 0) return null;
+  const isTrial = typeof d?.notice === 'string' && d.notice.includes('體驗模式');
+  const lines = hotels.slice(0, 4).map((h, i) => ({
+    label: `No.${i + 1} ${asText(h.star) || '酒店'}`,
+    value: `${asText(h.name)} ${asText(h.priceText)}${h.interestsPoi ? `（${asText(h.interestsPoi)}）` : ''}`,
+  }));
+  return {
+    type: 'generic',
+    key: `fliggy-hotels-${hotels.length}-${asText(hotels[0]?.shId)}`,
+    title: isTrial ? '飛豬酒店搜索（體驗模式，價格脫敏）' : '飛豬酒店搜索（實時）',
+    lines,
+  };
+}
+
+/** ai_search 成功 → 飛豬 AI 旅行推薦卡（動態卡形態：aiGenerated 標識為
+ *  合規必需——Agent.md § 10 生成式內容紅線；長文按段落收斂為要點行） */
+function buildFliggyAiCard(data: unknown): DynamicCard | null {
+  const d = data as { answer?: unknown; aiGenerated?: unknown } | undefined;
+  const answer = typeof d?.answer === 'string' ? d.answer : '';
+  if (!answer) return null;
+  const paras = answer
+    .split(/\n+/)
+    .map((p) => p.replace(/[#*`\[\]()]/g, '').trim())
+    .filter((p) => p.length > 0)
+    .slice(0, 6);
+  return {
+    type: 'dynamic',
+    key: `fliggy-ai-${Date.now()}`,
+    title: '飛豬 AI 旅行推薦',
+    lines: paras.map((p, i) => ({ label: `${i + 1}`, value: p.slice(0, 80) })),
+    text: paras.length === 0 ? answer.slice(0, 120) : '',
+    aiGenerated: d?.aiGenerated === true,
   };
 }
 
@@ -865,6 +1342,45 @@ function buildPayGuideCard(data: unknown): JumpCard | null {
   };
 }
 
+/** dial_phone 成功 → 撥號交付卡（2026-10 設備通訊域；撥號面板已拉起，
+ *  是否真按下呼叫由系統面板承接、小程序不可見——卡片如實標註，不誇大為「已撥通」） */
+function buildPhoneCard(data: unknown): GenericCard | null {
+  const d = data as { phoneNumber?: unknown } | undefined;
+  const phoneNumber = asText(d?.phoneNumber);
+  if (!phoneNumber) return null;
+  return {
+    type: 'generic',
+    key: `phone-${phoneNumber}-${Date.now()}`,
+    title: '撥號面板已拉起',
+    lines: [
+      { label: '號碼', value: phoneNumber },
+      { label: '狀態', value: '請在面板上確認呼叫（取消可關閉）' },
+    ],
+  };
+}
+
+/** send_mail 成功 → 郵件交付卡（按 mode 如實區分：sent = 雲端已發出，
+ *  copied = 雲端不可用已降級複製引導——不誇大不掩蓋，「真實或誠實缺失」） */
+function buildMailCard(data: unknown): GenericCard | null {
+  const d = data as { to?: unknown; subject?: unknown; body?: unknown; mode?: unknown; guidance?: unknown } | undefined;
+  const to = asText(d?.to);
+  if (!to) return null;
+  const sent = asText(d?.mode) === 'sent';
+  const body = asText(d?.body);
+  const lines = [
+    { label: '收件人', value: to },
+    { label: '主題', value: asText(d?.subject) || '（無主題）' },
+  ];
+  if (body) lines.push({ label: '正文', value: body.length > 60 ? `${body.slice(0, 60)}…` : body });
+  lines.push({ label: sent ? '狀態' : '下一步', value: asText(d?.guidance) || (sent ? '已發出' : '內容已複製，請到郵件 App 貼上發送') });
+  return {
+    type: 'generic',
+    key: `mail-${to}-${asText(d?.mode)}-${Date.now()}`,
+    title: sent ? '郵件已發送' : '郵件已準備好（複製引導）',
+    lines,
+  };
+}
+
 /** search_flights 成功 → 航班交付卡（卡片即選航班界面，每班掛快捷預訂） */
 function buildFlightCard(data: unknown): FlightCard | null {
   const d = data as { from?: unknown; to?: unknown; date?: unknown; flights?: unknown; source?: unknown } | undefined;
@@ -967,11 +1483,11 @@ function buildWeatherCard(data: unknown): WeatherCard | null {
     tempLabel: `${d.temperature}°`,
     lines: [
       ...(typeof d.humidity === 'string' && d.humidity ? [{ label: '濕度', value: `${d.humidity}%` }] : []),
-      ...(wind ? [{ label: '風況', value: wind }] : []),
+      ...(wind ? [{ label: '風力', value: wind }] : []),
       ...(typeof d.reportTime === 'string' && d.reportTime ? [{ label: '發布時間', value: d.reportTime }] : []),
     ],
-    sourceLabel: d.source === 'weathercn_realtime' ? '中國天氣網' : '模擬數據',
-    sourceReal: d.source === 'weathercn_realtime',
+    sourceLabel: d.source === 'amap_realtime' ? '高德實時' : '模擬數據',
+    sourceReal: d.source === 'amap_realtime',
   };
 }
 
@@ -993,20 +1509,26 @@ Page({
     scrollIntoView: '',
     exampleChips: DEFAULT_EXAMPLES,
     chipsTitle: '我可以幫你辦：',
+    routineChips: [] as Array<{ id: string; text: string; label: string }>,
   } as HomePageData,
 
-  onLoad(): void {
+  onLoad(query: Record<string, string | undefined>): void {
     const self = this as unknown as HomePageThis;
     self.msgSeq = 0;
     self.activePlanId = '';
     self.succeededTaskIds = new Set();
+    self.succeededTaskLabels = [];
     self.deliveredTaskIds = new Set();
     self.voiceSession = null;
     logInfo(`${BRAND_NAME} 首頁載入`);
 
-    // 快捷入口個人化：常用話語 Top N 優先，無記錄時回退出廠範例
-    // （onLoad 先於首幀渲染，同步 storage 讀取無閃爍）
-    self.setData(buildExampleChips());
+    // 快捷入口個人化：常用話語 Top N 優先，無記錄時回退出廠範例；例程
+    // 入口同步初始化（onLoad 先於首幀渲染，同步 storage 讀取無閃爍）
+    self.setData({ ...buildExampleChips(), ...buildRoutineChips() });
+
+    // 掃碼帶參預填（項3）：三來源解析意圖後僅預填輸入框（信任最小化，
+    // 不自動 dispatch），提示文案排在歡迎語之後（首訪時進 800ms 品牌展示窗口）
+    const scanIntent = resolveScanIntent(query);
 
     // 啟動載入畫面（2026-10 產品評審修訂）：僅設備首次冷啟動顯示 800ms
     // 品牌首秀，回訪啟動直接跳過——工作型工具不為內容型開場反覆支付
@@ -1015,6 +1537,18 @@ Page({
     // 與範例 chips 錯落動畫銜接（chips 的 wx:if 綁定 !splash）。
     const firstLaunch = !getItem<boolean>('splash:seen', false);
     const welcome = `你好，我是${BRAND_NAME}，說一句「明天北京到上海的高鐵」，我來辦。\n剩下的，交給下面的示例。`;
+    const appendScanHint = () => {
+      if (!scanIntent) return;
+      self.setData({ inputText: scanIntent });
+      const hint = `已從二維碼帶入需求：「${scanIntent}」。\n請核對內容後點擊發送，我再為你辦理。`;
+      logInfo('助手回覆（掃碼預填提示）');
+      self.appendMessage({
+        id: self.nextMsgId(),
+        role: 'assistant',
+        content: hint,
+        timestamp: Date.now(),
+      });
+    };
     if (firstLaunch) {
       setItem('splash:seen', true);
       setTimeout(() => {
@@ -1026,6 +1560,7 @@ Page({
           content: welcome,
           timestamp: Date.now(),
         });
+        appendScanHint();
         setTimeout(() => self.setData({ splash: false }), 820);
       }, 800);
     } else {
@@ -1037,6 +1572,7 @@ Page({
         content: welcome,
         timestamp: Date.now(),
       });
+      appendScanHint();
     }
 
     // 重活延後：Agent Runtime 建構（globalData.agent getter 首次存取觸發，
@@ -1056,6 +1592,7 @@ Page({
           onStateChange: (s) => self.onAgentStateChange(s),
           onPlanUpdate: (p) => self.onAgentPlanUpdate(p),
           onTaskUpdate: (t) => self.onAgentTaskUpdate(t),
+          onCheckpointRequest: (payload, respond) => self.onAgentCheckpointRequest(payload, respond),
         });
       } else {
         logError('Agent runtime 未就緒（globalData.agent 缺失），對話功能不可用');
@@ -1093,6 +1630,10 @@ Page({
     }
     self.unsubscribe?.();
     self.unsubscribe = undefined;
+    // 在途確認卡應答全部拒絕出清（頁面卸載後無法點按，fail-closed；
+    // respond 冪等，遲到的超時拒絕無副作用）
+    for (const respond of checkpointResponders.values()) respond(false);
+    checkpointResponders.clear();
     // 進行中的錄音會話丟棄（辨識結果不再消費）
     self.voiceSession?.abort();
     self.voiceSession = null;
@@ -1186,6 +1727,56 @@ Page({
   },
 
   /**
+   * 售罄車次行「監控」（第二梯隊·項A）：創建餘票條件監控，雲端定時
+   * 觸發器按節拍掃描，命中即行程頁徽章亮起（模板 ID 配置後為推模式）。
+   * 授權彈窗失敗 / 未授權不阻斷創建（拉模式語義：命中狀態經行程頁
+   * 刷新可見，用戶自主選擇授權与否）。
+   */
+  async onMonitorTrain(this: HomePageThis, e: { currentTarget?: { dataset?: { trainNo?: string; ctx?: string } } }): Promise<void> {
+    const trainNo = e.currentTarget?.dataset?.trainNo;
+    const ctxRaw = e.currentTarget?.dataset?.ctx;
+    if (!trainNo || !ctxRaw) return;
+    try {
+      const ctx = JSON.parse(ctxRaw) as { from?: string; to?: string; date?: string };
+      if (!ctx.from || !ctx.to || !ctx.date) return;
+      // 訂閱授權（模板 ID 配置後才彈；必須由 tap 動作同步觸發，故置於雲調用前）
+      if (SUBSCRIBE_TMPL_TICKET_MONITOR) {
+        await new Promise<void>((resolve) => {
+          wx.requestSubscribeMessage({
+            tmplIds: [SUBSCRIBE_TMPL_TICKET_MONITOR],
+            success: () => resolve(),
+            fail: () => resolve(), // 授權失敗不阻斷（拉模式仍可用）
+          });
+        });
+      }
+      const res = await createMonitor(CLOUD_ENV, {
+        kind: 'train_tickets',
+        params: { from: ctx.from, to: ctx.to, date: ctx.date, trainNo },
+        label: `${ctx.from}→${ctx.to} ${ctx.date} ${trainNo}`,
+      });
+      if (res.code === 0 && res.data) {
+        upsertMonitor({
+          monitorId: res.data.monitorId,
+          label: res.data.label,
+          kind: res.data.kind,
+          params: res.data.params,
+          hit: res.data.hit,
+          lastMessage: res.data.lastMessage,
+          lastCheckedAt: res.data.lastCheckedAt,
+          createdAt: res.data.createdAt,
+        });
+        logInfo(`餘票監控已創建：${trainNo}（${ctx.from}→${ctx.to} ${ctx.date}）`);
+        wx.showToast({ title: '已加入監控，可在行程頁查看', icon: 'none' });
+      } else {
+        wx.showToast({ title: res.message ?? '監控創建失敗', icon: 'none' });
+      }
+    } catch (err) {
+      logError('餘票監控創建失敗', err);
+      wx.showToast({ title: '監控創建失敗，請稍後再試', icon: 'none' });
+    }
+  },
+
+  /**
    * 航班卡快捷預訂：以「預訂 + 完整要素」的自然語言指令重新進入規劃鏈路
    * （與車次卡同構：規劃器支援字面航班號，確認彈窗展示即時票價）
    */
@@ -1230,12 +1821,25 @@ Page({
     wx.navigateTo({ url: '/pages/trips/index' });
   },
 
+  /** 頂部「技能」入口：前往技能中心（鍛造 / 提案 / 公開技能 / 審批） */
+  onTapSkillCenter(this: HomePageThis): void {
+    wx.navigateTo({ url: '/pages/skills-center/index' });
+  },
+
+  /** 缺口卡「去技能中心起草」：帶意圖預填鍛造需求（缺口引導閉環） */
+  onTapForgeGap(this: HomePageThis, e: { currentTarget?: { dataset?: { intent?: string } } }): void {
+    const intent = e.currentTarget?.dataset?.intent ?? '';
+    const qs = intent ? `?intent=${encodeURIComponent(intent)}` : '';
+    wx.navigateTo({ url: `/pages/skills-center/index${qs}` });
+  },
+
   /** 清空對話並重置 Agent */
   onTapReset(this: HomePageThis): void {
     getAgent()?.resetAgent();
     this.msgSeq = 0;
     this.activePlanId = '';
     this.succeededTaskIds.clear();
+    this.succeededTaskLabels = [];
     this.deliveredTaskIds.clear();
     this.voiceSession?.abort();
     this.voiceSession = null;
@@ -1252,8 +1856,9 @@ Page({
       loading: false,
       recording: false,
       inputText: '',
-      // 對話清空後快捷入口區隨之重現，刷新為最新常用話語
+      // 對話清空後快捷入口區隨之重現，刷新為最新常用話語與例程
       ...buildExampleChips(),
+      ...buildRoutineChips(),
     });
   },
 
@@ -1269,6 +1874,7 @@ Page({
 
     // 本輪收尾判定集歸零（task_NNN 跨輪同名，須以輪次隔離，同 activePlanId 理由）
     this.succeededTaskIds.clear();
+    this.succeededTaskLabels = [];
     this.deliveredTaskIds.clear();
 
     // 1. 追加用戶訊息（content 全量落日誌：Console + dev-log 旁路，不截斷，
@@ -1340,6 +1946,89 @@ Page({
         });
       }
 
+      // 3.5 個人資料保存卡 → 追加（對話捕獲）：純 remembered / invalid
+      //     條目（顯式已保存回執 / 校驗未過告知）直接以確認態透出（無按鈕）；
+      //     含 suggested 條目（推斷提議）以 pending 態透出確認卡，用戶點
+      //     「保存」才落盤（證號 / 手機號卡面脫敏，input 攜完整值）
+      if (res.profileProposal && res.profileProposal.length > 0) {
+        logInfo(`助手回覆（個人資料卡）：${res.profileProposal.map((p) => p.label).join('、')}`);
+        this.appendMessage({
+          id: this.nextMsgId(),
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          cards: [{
+            key: `profile-${Date.now()}`,
+            type: 'profile',
+            entries: res.profileProposal,
+            status: res.profileProposal.every((p) => p.status !== 'suggested') ? 'confirmed' : 'pending',
+          }],
+        });
+      }
+
+      // 4. 能力缺口卡 → 追加（規劃器判定無可用技能）：以提案卡引導前往
+      //    技能中心鍛造（點擊預填需求；提交前確認去敏語義，計劃紅線：
+      //    缺口只產生提案卡，不自動發送 forge）
+      if (res.capabilityGap) {
+        const gap = res.capabilityGap;
+        logInfo(`助手回覆（缺口卡）：${gap.skillName}`);
+        this.appendMessage({
+          id: this.nextMsgId(),
+          role: 'assistant',
+          content: '',
+          timestamp: Date.now(),
+          cards: [{
+            key: `gap-${Date.now()}`,
+            type: 'gap',
+            skillName: gap.skillName,
+            suggestion: gap.suggestion,
+            intent: gap.intent,
+          }],
+        });
+      }
+
+      // 4.5 例程提議卡（重複意圖固化，項2）：任務流成功且話語重複 ≥2 次
+      //     且未固化 / 未拒絕過時，提議存為快捷例程（推斷須徵求同意，
+      //     與偏好分層記憶同口徑；預訂類指令由儲存層過濾不記頻次，自然不出卡）
+      if (
+        finalState === 'completed' &&
+        this.succeededTaskLabels.length > 0 &&
+        !hasRoutineText(intent) &&
+        !isRoutineDismissed(intent)
+      ) {
+        const phrase = findQuickPhrase(intent);
+        if (phrase && phrase.count >= 2) {
+          const routineLabel = this.succeededTaskLabels.join(' → ').slice(0, 60);
+          logInfo(`助手回覆（例程提議卡）：${routineLabel}`);
+          this.appendMessage({
+            id: this.nextMsgId(),
+            role: 'assistant',
+            content: '',
+            timestamp: Date.now(),
+            cards: [{
+              key: `routine-save-${Date.now()}`,
+              type: 'routine-save',
+              text: intent,
+              label: routineLabel,
+              status: 'pending',
+            }],
+          });
+        }
+      }
+
+      // 5. 執行記錄落盤（項E）：僅終態留痕（completed / failed；追問、
+      //    BUSY 等中間態不留痕），個人資料頁「執行記錄」分區倒序展示；
+      //    失敗輪若已有部分成功任務則記 mixed（部分完成）
+      if (finalState === 'completed' || finalState === 'failed') {
+        appendActivity(
+          intent,
+          finalState === 'completed'
+            ? 'completed'
+            : (this.succeededTaskLabels.length > 0 ? 'mixed' : 'failed'),
+          this.succeededTaskLabels,
+        );
+      }
+
       this.setData({
         loading: false,
         state: finalState,
@@ -1406,6 +2095,175 @@ Page({
     this.setData({ messages });
   },
 
+  /** 例程提議卡「存例程」：話語 + 流程序列固化落盤 + 卡片轉已存態 +
+   *  刷新例程 chips（僅 pending 卡可點；確認後例程區即時可見） */
+  onConfirmRoutine(this: HomePageThis, e: { currentTarget?: { dataset?: { msgId?: string } } }): void {
+    const msgId = e.currentTarget?.dataset?.msgId ?? '';
+    if (!msgId) return;
+    const card = this.data.messages
+      .find((m) => m.id === msgId)
+      ?.cards?.find((c): c is RoutineSaveCard => c.type === 'routine-save' && c.status === 'pending');
+    if (!card) return;
+    const entry = addRoutine(card.text, card.label);
+    this.updateRoutineCard(msgId, 'confirmed');
+    if (entry) {
+      this.setData(buildRoutineChips());
+      wx.showToast({ title: '已存為例程，首頁可一鍵觸發', icon: 'none' });
+    }
+  },
+
+  /** 例程提議卡「不用了」：丟棄提議（同話語不再重複詢問）+ 卡片轉已取消態 */
+  onDismissRoutine(this: HomePageThis, e: { currentTarget?: { dataset?: { msgId?: string } } }): void {
+    const msgId = e.currentTarget?.dataset?.msgId ?? '';
+    if (!msgId) return;
+    const card = this.data.messages
+      .find((m) => m.id === msgId)
+      ?.cards?.find((c): c is RoutineSaveCard => c.type === 'routine-save' && c.status === 'pending');
+    if (!card) return;
+    dismissRoutineText(card.text);
+    this.updateRoutineCard(msgId, 'dismissed');
+  },
+
+  /** 內部：就地更新例程提議卡狀態（以消息 ID 定位；僅 pending 態卡片會被
+   *  更新，與 updateMemoryCard 同構） */
+  updateRoutineCard(this: HomePageThis, msgId: string, status: 'confirmed' | 'dismissed'): void {
+    const messages = this.data.messages.map((msg) => {
+      if (msg.id !== msgId) return msg;
+      const cards = (msg.cards ?? []).map((c) =>
+        c.type === 'routine-save' && c.status === 'pending' ? { ...c, status } : c,
+      );
+      return { ...msg, cards };
+    });
+    this.setData({ messages });
+  },
+
+  /** 例程 chip 點擊：刷新新鮮度後以口令進入 dispatch——規劃仍走 LLM 全鏈路
+   *  （例程僅承擔入口個人化，不快取 Plan，避免模板過期下單） */
+  async onTapRoutine(this: HomePageThis, e: { currentTarget?: { dataset?: { id?: string; text?: string } } }): Promise<void> {
+    const id = e.currentTarget?.dataset?.id ?? '';
+    const text = e.currentTarget?.dataset?.text ?? '';
+    if (!text) return;
+    if (id) touchRoutine(id);
+    await this.dispatch(text);
+  },
+
+  /** 例程 chip 長按：確認後刪除例程（例程區即時刷新） */
+  onLongPressRoutine(this: HomePageThis, e: { currentTarget?: { dataset?: { id?: string } } }): void {
+    const id = e.currentTarget?.dataset?.id ?? '';
+    if (!id) return;
+    wx.showModal({
+      title: '刪除例程',
+      content: '刪除後可通過對話再次累積並重新固化。',
+      confirmText: '刪除',
+      confirmColor: '#b4552d',
+      success: (res) => {
+        if (!res.confirm) return;
+        removeRoutine(id);
+        this.setData(buildRoutineChips());
+      },
+    });
+  },
+
+  /** 個人資料保存卡「保存」：以卡面 suggested 條目回傳落盤（所見即所寫，
+   * storage 側防禦式校驗 + 查重）+ 卡片轉已保存態（僅 pending 卡可點；
+   * remembered 條目已落盤、invalid 條目不可保存，均不回傳） */
+  onConfirmProfile(this: HomePageThis, e: { currentTarget?: { dataset?: { msgId?: string } } }): void {
+    const msgId = e.currentTarget?.dataset?.msgId ?? '';
+    if (!msgId) return;
+    const agent = getAgent();
+    if (!agent) return;
+    const card = this.data.messages
+      .find((m) => m.id === msgId)
+      ?.cards?.find((c): c is ProfileCard => c.type === 'profile' && c.status === 'pending');
+    if (!card) return;
+    const saved = agent.confirmProfileSave(card.entries.filter((p) => p.status === 'suggested'));
+    this.updateProfileCard(msgId, 'confirmed');
+    if (saved.length > 0) {
+      wx.showToast({ title: '已保存，之後下單自動帶入', icon: 'none' });
+    }
+  },
+
+  /** 個人資料保存卡「不用了」：丟棄提議（同鍵同值不再重複詢問）+ 卡片轉已取消態 */
+  onDismissProfile(this: HomePageThis, e: { currentTarget?: { dataset?: { msgId?: string } } }): void {
+    const msgId = e.currentTarget?.dataset?.msgId ?? '';
+    if (!msgId) return;
+    const agent = getAgent();
+    if (!agent) return;
+    agent.dismissProfileProposal();
+    this.updateProfileCard(msgId, 'dismissed');
+  },
+
+  /** 內部：就地更新個人資料保存卡狀態（以消息 ID 定位；僅 pending 態卡片
+   *  會被更新，與 updateMemoryCard 同構） */
+  updateProfileCard(this: HomePageThis, msgId: string, status: 'confirmed' | 'dismissed'): void {
+    const messages = this.data.messages.map((msg) => {
+      if (msg.id !== msgId) return msg;
+      const cards = (msg.cards ?? []).map((c) =>
+        c.type === 'profile' && c.status === 'pending' ? { ...c, status } : c,
+      );
+      return { ...msg, cards };
+    });
+    this.setData({ messages });
+  },
+
+  /** runtime 事件：寫操作確認請求（項C確認卡）——追加確認卡到聊天流，
+   *  應答句柄按消息 ID 登記（函式不可序列化，不入 data） */
+  onAgentCheckpointRequest(
+    this: HomePageThis,
+    payload: CheckpointCardPayload,
+    respond: CheckpointRespond,
+  ): void {
+    const msgId = this.nextMsgId();
+    checkpointResponders.set(msgId, respond);
+    this.appendMessage({
+      id: msgId,
+      role: 'assistant',
+      content: '有一項操作需要你確認：',
+      timestamp: Date.now(),
+      cards: [
+        {
+          type: 'confirm',
+          key: `confirm-${msgId}`,
+          title: payload.title,
+          skillName: payload.skillName,
+          detailLines: payload.detailLines,
+          confirmText: payload.confirmText,
+          status: 'pending',
+        },
+      ],
+    });
+  },
+
+  /** 確認卡「確認」：回傳應答 + 卡片轉已確認態（respond 冪等，遲到無副作用） */
+  onApproveCheckpoint(this: HomePageThis, e: { currentTarget?: { dataset?: { msgId?: string } } }): void {
+    const msgId = e.currentTarget?.dataset?.msgId ?? '';
+    if (!msgId) return;
+    checkpointResponders.get(msgId)?.(true);
+    checkpointResponders.delete(msgId);
+    this.updateConfirmCardStatus(msgId, 'approved');
+  },
+
+  /** 確認卡「取消」：回傳拒絕 + 卡片轉已取消態（下游任務將 cascadeSkip） */
+  onRejectCheckpoint(this: HomePageThis, e: { currentTarget?: { dataset?: { msgId?: string } } }): void {
+    const msgId = e.currentTarget?.dataset?.msgId ?? '';
+    if (!msgId) return;
+    checkpointResponders.get(msgId)?.(false);
+    checkpointResponders.delete(msgId);
+    this.updateConfirmCardStatus(msgId, 'rejected');
+  },
+
+  /** 內部：就地更新確認卡狀態（以消息 ID 定位；僅 pending 態卡片會被更新） */
+  updateConfirmCardStatus(this: HomePageThis, msgId: string, status: 'approved' | 'rejected'): void {
+    const messages = this.data.messages.map((msg) => {
+      if (msg.id !== msgId) return msg;
+      const cards = (msg.cards ?? []).map((c) =>
+        c.type === 'confirm' && c.status === 'pending' ? { ...c, status } : c,
+      );
+      return { ...msg, cards };
+    });
+    this.setData({ messages });
+  },
+
   /** runtime 事件：狀態機轉移 → 更新狀態列與 loading 氣泡文案 */
   onAgentStateChange(this: HomePageThis, state: AgentState): void {
     this.setData({ state, stateLabel: STATE_LABELS[state] ?? state });
@@ -1418,7 +2276,11 @@ Page({
     // 單一 Plan 內唯一，跨輪次對話中兩輪都有 task_001——若不隔離，後一輪
     // 的失敗事件會污染前一輪同名卡片的徽章（實測復現過）
     this.activePlanId = plan.id;
-    const cards: PlanCard[] = plan.tasks.map((t, i) => ({
+    const cards: AnyCard[] = [
+      // 執行工作面板頭卡（項4）：進度條 + 三態統計，插在步驟卡首位，
+      // 隨任務事件就地更新（refreshPanelCard 由同消息步驟卡狀態推算）
+      buildPanelCard(plan),
+      ...plan.tasks.map((t, i): PlanCard => ({
       type: 'plan',
       key: `plan-${plan.id}-${t.id}`,
       // 任務中文展示名（技術形態 summary 由 action 中文名兜底，不暴露 skillId 代碼）
@@ -1434,7 +2296,8 @@ Page({
         // 時間線標籤（行程 DAG 任務攜帶，如「10/11 下周六」；普通任務無此欄位）
         ...(t.timeLabel ? { timeLabel: t.timeLabel } : {}),
       },
-    }));
+      })),
+    ];
     // 行程 Plan 文案突出三要素（口語日期 + 城市 + 活動），與普通計劃文案區分
     const lead = plan.trip
       ? `已生成 ${plan.trip.dateLabel} ${plan.trip.city}行程計劃（${plan.tasks.length} 個任務，${plan.trip.activity}），開始為你執行：`
@@ -1449,22 +2312,24 @@ Page({
     });
   },
 
-  /** runtime 事件：任務狀態更新 → 更新進度徽章 + 成功時追加交付卡 */
+  /** runtime 事件：任務狀態更新 → 更新進度徽章 + 面板統計 + 成功時追加交付卡 */
   onAgentTaskUpdate(this: HomePageThis, task: Task): void {
-    // 1. 就地更新計劃卡徽章（僅當前活躍 Plan）
+    // 1. 就地更新計劃卡徽章 + 面板卡統計（僅當前活躍 Plan；面板統計由
+    //    更新後的同消息步驟卡狀態推算，兩者在同一次 map 內完成）
     const messages = this.data.messages.map((msg) => {
       if (!msg.cards?.length) return msg;
-      const idx = msg.cards.findIndex((c) => {
+      const hitIdx = msg.cards.findIndex((c) => {
         if (c.type !== 'plan') return false;
         const p = c.payload as { taskId?: string; planId?: string };
         return p.taskId === task.id && p.planId === this.activePlanId;
       });
-      if (idx < 0) return msg;
+      if (hitIdx < 0) return msg;
+      const hit = msg.cards[hitIdx] as PlanCard;
       const cards = msg.cards.slice();
-      cards[idx] = {
-        ...cards[idx],
+      cards[hitIdx] = {
+        ...hit,
         payload: {
-          ...(cards[idx] as PlanCard).payload,
+          ...hit.payload,
           status: task.status,
           statusLabel: TASK_STATUS_LABELS[task.status] ?? task.status,
           // 錯誤文案白名單映射：不透傳原始 message（可能含 wx API / 內部欄位等代碼級細節），
@@ -1472,12 +2337,24 @@ Page({
           ...(task.result?.error ? { error: friendlyTaskError(task.result.error.code) } : {}),
         },
       } as PlanCard;
+      // 面板卡統計刷新（同消息內同 PlanId 的面板卡；步驟卡已更新，推算即時）
+      const panelIdx = cards.findIndex(
+        (c) => c.type === 'panel' && c.planId === this.activePlanId,
+      );
+      if (panelIdx >= 0) {
+        cards[panelIdx] = refreshPanelCard(cards[panelIdx] as PanelCard, cards);
+      }
       return { ...msg, cards };
     });
     this.setData({ messages });
 
     // 本輪成功任務登記（收尾「卡片即結論」判定用；同任務多次事件冪等）
-    if (task.status === 'succeeded') this.succeededTaskIds.add(task.id);
+    if (task.status === 'succeeded') {
+      if (!this.succeededTaskIds.has(task.id)) {
+        this.succeededTaskLabels.push(taskLabel(task));
+      }
+      this.succeededTaskIds.add(task.id);
+    }
 
     // 2. 任務成功且有可渲染數據 → 追加結構化交付卡（過程與成果分離展示）
     this.appendResultCard(task);
@@ -1487,6 +2364,13 @@ Page({
   appendResultCard(this: HomePageThis, task: Task): void {
     if (task.status !== 'succeeded' || !task.result?.data) return;
     const data: unknown = task.result.data;
+
+    // 起草任務不出交付卡（第二梯隊·項D）：草稿全文由緊隨的 send_mail
+    // 確認卡承載（所見即所發），此處僅登記交付，避免收尾聚合文字重複展示
+    if (task.action === 'draft_mail') {
+      this.deliveredTaskIds.add(task.id);
+      return;
+    }
 
     // 陪伴對話特判（2026-10 六域回補）：對話形態成果以純文本氣泡呈現
     // （非卡片——與任務型交付的「卡片即結論」原則區分），reply 冠
@@ -1527,6 +2411,27 @@ Page({
     else if (task.action === 'create_order') card = buildTicketOrderCard(data);
     else if (task.action === 'list_orders') card = buildTicketOrdersCard(data);
     else if (task.action === 'pay_orders') card = buildPayGuideCard(data);
+    // 2026-10 設備通訊域：撥打電話 / 發送郵件（本地撥號 + 雲端 SMTP 代發）
+    else if (task.action === 'dial_phone') card = buildPhoneCard(data);
+    else if (task.action === 'send_mail') card = buildMailCard(data);
+    // 2026-10-14 麥當勞真實下單域：查店復用門市卡（結構同構），
+    // 查單 / 取消走通用兜底（字段已入 FIELD_LABELS 白名單）
+    else if (task.action === 'search_mcd_store') card = buildStoreCard(data);
+    else if (task.action === 'query_mcd_menu') card = buildMcdMenuCard(data);
+    else if (task.action === 'place_mcd_order') card = buildMcdOrderCard(data);
+    // 2026-10-14 瑞幸 / 滴滴域：查店復用門市卡；查單走通用兜底
+    else if (task.action === 'search_luckin_store') card = buildStoreCard(data);
+    else if (task.action === 'search_luckin_product') card = buildLuckinProductsCard(data);
+    else if (task.action === 'place_luckin_order') card = buildLuckinOrderCard(data);
+    else if (task.action === 'estimate_ride') card = buildRideEstimateCard(data);
+    else if (task.action === 'place_ride') card = buildRideOrderCard(data);
+    else if (task.action === 'query_ride') card = buildRideQueryCard(data);
+    // 2026-10-14 飛豬域（skill.travel.fliggy）：酒店搜索 + AI 行程推薦
+    else if (task.action === 'search_hotels') card = buildFliggyHotelsCard(data);
+    else if (task.action === 'ai_search') card = buildFliggyAiCard(data);
+    // 動態技能統一 run action：受控展示協議（display 標題/明細 + AI 標識，
+    // 不暴露 raw JSON；display 缺失退化為截斷文字）
+    else if (task.action === 'run' && task.skillId.startsWith(DYN_SKILL_PREFIX)) card = buildDynamicDisplayCard(data);
     if (!card) {
       // 未知 action → interaction/card-render 通用兜底卡（成功結果不靜默丟棄）
       const rc = renderTaskFallback(task);

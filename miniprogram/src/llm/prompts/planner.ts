@@ -16,10 +16,28 @@ import { extractPassenger } from '../../utils/passenger';
 import { extractTripSlots } from '../../utils/trip';
 import { PREFERENCE_DOMAINS } from '../../storage/preferences';
 
+/**
+ * 重規劃失敗上下文（業務錯誤回傳 LLM 調整 Plan，規範 § 9）
+ *
+ * 2026-10 第一梯隊·項6（借鑑千問 Go 動態路徑切換）：售罄 / 無票類
+ * 業務失敗回傳規劃器，引導 LLM 規劃替代路徑（而非直接以失敗收斂）
+ */
+export interface ReplanFailedContext {
+  /** 上一輪方案中的業務性失敗任務（中文摘要 + 業務錯誤文案） */
+  failures: Array<{
+    action: string;
+    summary?: string;
+    errorCode: string;
+    errorMessage: string;
+  }>;
+}
+
 export interface PlannerPromptInput {
   userIntent: string;
   availableSkills: SkillMetaSlim[];
   ctx: AgentContext;
+  /** 重規劃上下文（可選）：附帶時 LLM 應規劃避開同路徑的替代方案 */
+  failedContext?: ReplanFailedContext;
 }
 
 /** 構造 Planner 訊息陣列 */
@@ -29,6 +47,18 @@ export function buildPlannerPrompt(input: PlannerPromptInput): Array<{
 }> {
   const skillsJson = JSON.stringify(input.availableSkills, null, 2);
   const contextStr = buildContextString(input.ctx);
+  // 重規劃段落（僅附帶失敗上下文時注入）：置於用戶意圖之後——LLM 先讀
+  // 原意圖再讀失敗背景，調整方向不脫離原目標
+  const replanSection = input.failedContext
+    ? [
+        `## 上一輪方案執行失敗（本輪為重規劃，請調整路徑）`,
+        ...input.failedContext.failures.map(
+          (f) => `- 任務「${f.summary || f.action}」失敗：${f.errorMessage}`,
+        ),
+        `請基於原意圖重新規劃：優先產出可達成同樣目標的替代路徑（如改其他渠道 / 調整日期時間 / 改為查詢引導）；若確無可行替代，回應 { "tasks": [] } 並在 message 中向用戶說明。`,
+        ``,
+      ]
+    : [];
   return [
     {
       role: 'system',
@@ -40,6 +70,7 @@ export function buildPlannerPrompt(input: PlannerPromptInput): Array<{
         `## 用戶意圖`,
         `> ${input.userIntent}`,
         ``,
+        ...replanSection,
         `## 上下文`,
         contextStr,
         ``,
@@ -92,6 +123,20 @@ function buildContextString(ctx: AgentContext): string {
     lines.push('- 用戶位置：定位已被拒絕授權——需座標的任務（如天氣）應回覆引導用戶到小程序設置開啟定位授權，勿假設可獲取座標');
   } else if (ctx.userProfile.locationAuth === 'error') {
     lines.push('- 用戶位置：定位失敗（非拒絕授權，可能系統定位開關關閉 / 網路異常）——需座標的任務應向用戶說明定位暫不可用，建議稍後重試');
+  }
+  // POI 查詢中心三級規則（2026-10-14 修訂：定位為默認中心，顯式地點線索才覆蓋）：
+  //   1. 「附近 / 周邊 / 最近」無地點限定 → 定位座標（lat/lng）
+  //   2. 「我家 / 家附近 / 我的收貨地址」→ 家地址權威行 address 字面值
+  //   3. 「<用戶口述的具體地址 / 道路 / 小區 / 地標>附近」→ address=意圖原文地址
+  // （badcase：「？我家，不是我定位附近」——用戶明確區分家與當前定位）
+  if (ctx.userProfile.homeAddress) {
+    lines.push(
+      `- 家地址（地址簿默認收貨地址）：${ctx.userProfile.homeAddress.full}——search_poi 查詢中心規則：僅說「附近 / 周邊」時用定位座標（lat/lng）；提到「我家 / 家附近 / 我的收貨地址」時以本行字面值填 address（不填 lat/lng）；口述具體地址（如「XX路 / XX小區附近」）時以意圖原文地址填 address；均嚴禁改用定位座標`,
+    );
+  } else {
+    lines.push(
+      '- 家地址：未知（地址簿未填寫）——「我家 / 我的收貨地址」類意圖回空 tasks 追問（提示到「我的 → 收貨地址」添加默認地址，或請用戶直接說出具體地址）；僅說「附近」時正常用定位座標，嚴禁以定位代替家位置',
+    );
   }
   if (Object.keys(ctx.userProfile.preferences).length > 0) {
     // 帶中文域標籤 + 採用指令：白名單域的鍵空間與規則 12 memory 欄位一致；
@@ -149,7 +194,13 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
 3. 任務之間若有資料依賴（如「查到的車次」要傳給「下單」），必須用 inputBindings 串接，否則並行執行。每個 task 必須帶 "id" 欄位（"task_001" 起連續編號），inputBindings.fromTaskId 與 dependsOn 只能引用這些 id 原文——自編 id（如 task_e01）會導致執行時綁定失敗回滚。
 4. **寫操作一律 requiresHumanConfirm=true**；查詢類為 false。
 5. 無依賴的任務可並行（dependsOn: []）。
-6. 若用戶意圖無法對應任何 SKILL，回應 { "tasks": [] } 並附 "message" 說明原因。
+6. 若用戶意圖無法對應任何 SKILL，分兩種情況回應空 tasks：
+   - **缺必要參數**（補充後可規劃，如缺乘車人）→ 回應 { "tasks": [] } 並在
+     "message" 中追問；
+   - **能力缺口**（現有 SKILL 範圍外，補參數也無法解決，如查農曆、匯率換算
+     等不在簡表中的能力）→ 回應
+     { "tasks": [], "missingCapability": { "skillName": "≤12字技能名", "suggestion": "≤60字建議（說明可到技能中心鍛造此能力）" }, "message": "同 suggestion 文案" }。
+     missingCapability 僅在 tasks 為空時合法，能對應簡表能力時嚴禁輸出。
 7. 每個 task 必須有 summary 欄位（人類可讀，≤ 30 字），供確認畫面展示。
 8. **下單 / 支付前必須先規劃同域查詢任務**（如 book_ticket 前先 search_train），
    並遵守「字面值優先」：
@@ -211,6 +262,18 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
    偏好）/ budget（預算檔位），值為簡短偏好值（≤ 20 字）。約束：僅此類
    長期意圖才沉澱，「這次靠窗」類一次性需求嚴禁輸出；上下文「用戶偏好
    （長期記憶）」已有的鍵若無變化不必重複輸出；無偏好增量時省略欄位。
+13. **設備通訊域**（dial_phone / draft_mail / send_mail）：電話號碼
+   （phoneNumber）與郵箱地址（to）只能原樣取自用戶原文（字面值優先），
+   **嚴禁推測 / 編造或沿用範例號碼與地址**；缺失時回應 { "tasks": [] } 並在
+   "message" 中追問（如「請告訴我要撥打的電話號碼」）。撥打 12306 /
+   10086 等熱線是 dial_phone 而非火車票域；send_mail 由雲端 SMTP 代發
+   （不可用時自動降級複製引導，無需規劃備用任務），也不得向用戶承諾必達。
+   **起草場景拆兩任務**：用戶給了收件地址但正文要你代寫（「幫我寫封請假
+   郵件到 xx@xx.com，就說明天生病」）時，先 draft_mail（input 攜 to /
+   topic / context，context 原樣摘自用戶要求不得擴編事實），再 send_mail
+   （dependsOn 該起草任務，inputBindings 綁 data.subject → subject、
+   data.body → body）；用戶已給全文（主題 + 正文都明確）時單任務
+   send_mail 直達，不經 draft_mail。
 
 ## 輸出 schema
 
@@ -232,12 +295,13 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
     }
   ],
   "message": "可選：當 tasks 為空時的理由或追問",
+  "missingCapability": { "skillName": "農曆查詢", "suggestion": "暫無農曆換算能力，可到技能中心鍛造「農曆查詢」技能" },
   "memory": { "seat": "靠窗" }
 }
 \`\`\`
 
-（trip 與 timeLabel 僅行程複合意圖攜帶；memory 僅規則 12 命中時攜帶，
-普通意圖省略這三個欄位）
+（trip 與 timeLabel 僅行程複合意圖攜帶；missingCapability 僅規則 6 能力缺口
+時攜帶（此時 tasks 必為空）；memory 僅規則 12 命中時攜帶，普通意圖省略這四個欄位）
 
 ## 範例一：僅查詢
 

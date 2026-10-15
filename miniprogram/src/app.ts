@@ -35,20 +35,27 @@ import { instance as flightVariflight } from './skills/builtin/flight-variflight
 import { instance as weatherQuery } from './skills/builtin/weather-query/index';
 import { instance as mapTianditu } from './skills/builtin/map-tianditu/index';
 import { instance as coffeeStarbucks } from './skills/builtin/coffee-starbucks/index';
+import { instance as mcdonalds } from './skills/builtin/mcdonalds/index';
+import { instance as coffeeLuckin } from './skills/builtin/coffee-luckin/index';
+import { instance as rideDidi } from './skills/builtin/ride-didi/index';
+import { instance as travelFliggy } from './skills/builtin/travel-fliggy/index';
 import { instance as shoppingMall } from './skills/builtin/shopping-mall/index';
 import { instance as bookingCenter } from './skills/builtin/booking-center/index';
 import { instance as ticketShow } from './skills/builtin/ticket-show/index';
 import { instance as counseling } from './skills/builtin/counseling/index';
 import { instance as paymentAicard } from './skills/builtin/payment-aicard/index';
+import { instance as deviceComm } from './skills/builtin/device-comm/index';
 import { Orchestrator } from './core/orchestrator';
 import { buildContext } from './core/context';
-import { confirmPlan, awaitCheckpoint } from './interaction/checkpoint';
+import { confirmPlan, awaitCheckpoint, setCheckpointSink } from './interaction/checkpoint';
 import { ensureCloudInit, isDevEnv, LOCAL_RUN_BASE } from './services/cloud';
 import { BRAND_NAME } from './types/brand';
 import { info as logInfo, error as logError, setRemoteSink } from './utils/logger';
 import { appendHistory } from './storage/session';
 import { confirmProposal, dismissPendingMemory } from './storage/preferences';
-import type { AgentResponse, AgentState } from './types/agent-state';
+import { confirmProfileSave, dismissProfileProposal } from './storage/profile-proposal';
+import type { AgentResponse, AgentState, ProfileProposalEntry } from './types/agent-state';
+import type { CheckpointCardPayload, CheckpointRespond } from './types/checkpoint';
 import type { Plan } from './types/plan';
 import type { Task } from './types/task';
 
@@ -68,6 +75,16 @@ export const CLOUD_ENV = 'micromate-prod-001';
  * 屬部署側配置，模板 ID 就位後上線——授權鏈路本身真實可用。
  */
 export const SUBSCRIBE_TMPL_TRIP_REMIND = '';
+
+/**
+ * 餘票監控命中通知模板 ID（2026-10 第二梯隊·項A）
+ *
+ * 配置驅動與 SUBSCRIBE_TMPL_TRIP_REMIND 同款：為空串時首頁售罄車次行
+ * 「監控」按鈕跳過授權彈窗直接創建（拉模式——命中狀態經行程頁刷新可見）；
+ * 配置後 tap 時彈訂閱授權，雲端 tick 命中時經 subscribeMessage.send 推送
+ * （推模式，需部署側配齊 WX_APPID / WX_APPSECRET / MONITOR_TMPL_ID）。
+ */
+export const SUBSCRIBE_TMPL_TICKET_MONITOR = '';
 
 /**
  * 半屏跳轉白名單（2026-10 半屏升級：wx.openEmbeddedMiniProgram）
@@ -94,6 +111,9 @@ export interface AgentRuntimeEvents {
   onTaskUpdate?: (task: Task) => void;
   /** Plan 生成 / 更新（計劃卡片渲染用） */
   onPlanUpdate?: (plan: Plan) => void;
+  /** 寫操作確認請求（第二梯隊·項C確認卡）：渲染確認卡，用戶點按後經
+   * respond 回傳；僅 requiresHumanConfirm / 域級 confirm 檔位的任務觸發 */
+  onCheckpointRequest?: (payload: CheckpointCardPayload, respond: CheckpointRespond) => void;
 }
 
 /** Agent Runtime：由 miniprogram/app.ts 於 onLaunch 建構並注入 globalData */
@@ -106,6 +126,12 @@ export interface AgentRuntime {
   confirmMemory(entries: Array<{ key: string; value: string }>): string[];
   /** 拒絕記憶提議（確認卡「不用了」按鈕）：丟棄並記錄拒絕（同鍵同值不再重複提議） */
   dismissMemory(): void;
+  /** 確認個人資料保存提議（確認卡「保存」按鈕，對話捕獲）：UI 回傳卡面
+   * 條目 → 乘車人 / 地址落盤（所見即所寫；落盤前雙重校驗 + 查重，
+   * 證號加密存於本機）。@returns 實際保存的條目標籤（空 = 無有效條目） */
+  confirmProfileSave(entries: ProfileProposalEntry[]): string[];
+  /** 拒絕個人資料保存提議（確認卡「不用了」按鈕）：丟棄（同鍵同值不再重複提議） */
+  dismissProfileProposal(): void;
   /** 重置 Agent（清空當前 Plan，保留會話上下文） */
   resetAgent(): void;
   /** 當前狀態機狀態（Orchestrator 未建立時為 idle） */
@@ -128,16 +154,33 @@ function ensureSkillsRegistered(): void {
   // 「需求卡 + 渠道跳轉」（星巴克 / 京東 / 美團 / 大麥收銀台完成真實交易）；
   // 諮詢域為雲端 LLM 真實對話；支付域為聚合收銀台引導（無站內資金流）。
   // 出行三域維持「真實數據源 + 官方渠道跳轉下單」鏈路不變。
+  // 2026-10 設備通訊域：撥打電話 / 發郵件為本地設備能力（wx 原生 API
+  // 經 services/device 封裝），零雲端呼叫，離線可用。
   SkillRegistry.register(train12306);
   SkillRegistry.register(flightVariflight);
   SkillRegistry.register(weatherQuery);
   SkillRegistry.register(mapTianditu);
   SkillRegistry.register(coffeeStarbucks);
+  // 2026-10-14 麥當勞真實下單域：官方 MCP（open.mcd.cn）提供真實
+  // create-order / cancel-order，訂單在麥當勞側真實創建、用戶掃碼支付，
+  // 是首個突破「跳轉模式」的真實交易 SKILL
+  SkillRegistry.register(mcdonalds);
+  // 2026-10-14 瑞幸真實點單域：官方 AI 開放平台 MCP（gwmcp.lkcoffee.com），
+  // 訂單在本人瑞幸賬號真實創建、掃碼支付；Token 未配置時降級跳轉模式
+  SkillRegistry.register(coffeeLuckin);
+  // 2026-10-14 滴滴打車域：官方 MCP（mcp.didichuxing.com）taxi_* 工具鏈，
+  // 真實派單；叫車需確認彈窗（上游明令禁止自動下單）
+  SkillRegistry.register(rideDidi);
+  // 2026-10-14 飛豬旅行域：官方 FlyAI MCP（flyai.open.fliggy.com/mcp，
+  // HMAC-SHA256 請求簽名），內置公共 Key 開箱即真實數據（體驗模式價格
+  // 脫敏）；只讀搜索域（結構化酒店搜索 + AI 行程推薦），預訂在飛豬側完成
+  SkillRegistry.register(travelFliggy);
   SkillRegistry.register(shoppingMall);
   SkillRegistry.register(bookingCenter);
   SkillRegistry.register(ticketShow);
   SkillRegistry.register(counseling);
   SkillRegistry.register(paymentAicard);
+  SkillRegistry.register(deviceComm);
 }
 
 /** Runtime 單例（重複呼叫 createAgentRuntime 返回同一實例） */
@@ -179,6 +222,15 @@ export function createAgentRuntime(cloudEnv: string = CLOUD_ENV): AgentRuntime {
 
   const listeners = new Set<AgentRuntimeEvents>();
   let orchestrator: Orchestrator | null = null;
+
+  // 確認卡轉發通道（項C觀察者反轉）：interaction 層的 checkpoint 請求經
+  // sink 送到訂閱者（首頁）；多訂閱者時逐個轉發（respond 冪等，實際僅
+  // 持確認卡渲染的頁面會消費），依賴方向保持 app → interaction 單向
+  setCheckpointSink((payload, respond) => {
+    for (const l of listeners) {
+      l.onCheckpointRequest?.(payload, respond);
+    }
+  });
 
   /** 建構（或復用） Orchestrator，事件統一轉發給訂閱者 */
   async function getOrchestrator(): Promise<Orchestrator> {
@@ -242,6 +294,20 @@ export function createAgentRuntime(cloudEnv: string = CLOUD_ENV): AgentRuntime {
     dismissMemory(): void {
       dismissPendingMemory();
       logInfo('記憶確認：用戶拒絕，已丟棄提議（同鍵同值不再重複詢問）');
+    },
+
+    /** 個人資料保存卡回調：用戶點「保存」→ 以卡面條目落盤（對話捕獲；
+     * 確認數據由 UI 回傳——所見即所寫，storage 側防禦式校驗 + 查重） */
+    confirmProfileSave(entries: ProfileProposalEntry[]): string[] {
+      const saved = confirmProfileSave(entries);
+      logInfo(saved.length > 0 ? `個人資料確認：已保存 ${saved.join('、')}` : '個人資料確認：無有效條目');
+      return saved;
+    },
+
+    /** 個人資料保存卡回調：用戶點「不用了」→ 丟棄提議（同鍵同值不再重複詢問） */
+    dismissProfileProposal(): void {
+      dismissProfileProposal();
+      logInfo('個人資料確認：用戶拒絕，已丟棄提議（同鍵同值不再重複詢問）');
     },
 
     /** 重置 Agent（給 UI 呼叫） */

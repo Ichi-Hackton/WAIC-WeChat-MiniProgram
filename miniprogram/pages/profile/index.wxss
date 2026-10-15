@@ -159,6 +159,12 @@ page {
   line-height: 1.6;
 }
 
+/* 來源標籤（對話捕獲保存的條目，灰調與「默認」金調區分） */
+.badge-src {
+  border-color: #B8B2A6;
+  color: #9a9489;
+}
+
 /* 次行信息（脫敏證號 / 地區詳址） */
 .row-sub {
   margin-top: 8rpx;
@@ -174,6 +180,47 @@ page {
   color: #B3A78F;
   font-size: 28rpx;
   line-height: 1;
+}
+
+/* ---------- 技能權限（第二梯隊·項B）：picker 行右側檔位標籤 ---------- */
+
+.row-tier {
+  margin-left: 16rpx;
+  color: #8B7355;
+  font-size: 24rpx;
+  letter-spacing: 1rpx;
+  white-space: nowrap;
+}
+
+/* ---------- 執行記錄（第二梯隊·項E）：行尾時間 + 意圖省略 + 結果徽章配色 ---------- */
+
+.act-intent {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act-time {
+  margin-left: 16rpx;
+  color: #B3A78F;
+  font-size: 20rpx;
+  font-weight: 300;
+  letter-spacing: 1rpx;
+  white-space: nowrap;
+}
+
+/* 部分完成：灰調徽標（與「對話」來源籤同族） */
+.badge-mixed {
+  border-color: #B8B2A6;
+  color: #9a9489;
+}
+
+/* 未完成：暗紅描邊（與清除按鈕同源色，克制的失敗語義） */
+.badge-fail {
+  border-color: #C99A90;
+  color: #A04A3C;
 }
 
 /* ---------- 隱私說明（末尾弱化小字） ---------- */
@@ -195,4 +242,32 @@ page {
 
 .row-hover {
   background: #F5EFE3;
+}
+
+/* ============================================================
+   隱私控制中心（2026-10 第一梯隊·項5）：三鍵縱排
+   ============================================================ */
+
+.privacy-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 16rpx;
+}
+
+.privacy-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 22rpx 0;
+  background: #FCFAF5;
+  border: 1rpx solid #E8E0D0;
+  border-radius: 8rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 26rpx;
+  color: #A04A3C;
+  letter-spacing: 2rpx;
+}
+
+.privacy-btn-export {
+  color: #6B5D4A;
 }

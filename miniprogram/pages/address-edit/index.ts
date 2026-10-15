@@ -28,8 +28,8 @@ import {
   validateAddressForm,
   fromWechatAddress,
   ADDRESS_LIMIT,
-  type AddressFormInput,
 } from '../../src/storage/address';
+import type { AddressFormInput } from '../../src/storage/address';
 import { pickWechatAddress } from '../../src/services/address';
 
 /** 頁面資料結構 */

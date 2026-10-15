@@ -519,6 +519,18 @@ page {
   content: '';
 }
 
+/* 售罄行「監控」CTA（第二梯隊·項A）：暖金描邊輕按鈕，與預訂實心鈕區分（候補語義） */
+.book-btn-monitor {
+  color: #A04A3C;
+  border: 1rpx solid #C99A90;
+  border-radius: 6rpx;
+  padding: 4rpx 16rpx;
+}
+
+.book-btn-monitor::after {
+  content: '';
+}
+
 /* ============================================================
    訂單交付卡（hairline 憑證區）
    ============================================================ */
@@ -1028,5 +1040,164 @@ page {
 .memory-actions .pay-btn {
   flex: 1;
   margin: 0;
+  text-align: center;
+}
+
+/* ============ 個人資料保存卡（對話捕獲，2026-10） ============ */
+
+/* 提議條目分組（多條提議同卡時的條目間距；單條時無視覺差異） */
+.profile-entry + .profile-entry {
+  margin-top: 16rpx;
+}
+
+/* 條目分類標題（乘車人 / 收貨地址；多條提議同卡時區分歸屬，色與 order-mark 同源） */
+.profile-entry .entry-kind {
+  display: block;
+  font-size: 24rpx;
+  color: #8B7355;
+  margin-bottom: 4rpx;
+}
+
+/* 校驗未過告知行（invalid 條目說明，淺紅警示——與錯誤文案色同源） */
+.profile-invalid {
+  color: #A04A3C;
+}
+
+/* ============================================================
+   執行工作面板卡（2026-10 第一梯隊·項4）：進度條 + 三態統計
+   ============================================================ */
+
+.panel-card {
+  padding: 28rpx 36rpx;
+}
+
+.panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 20rpx;
+}
+
+.panel-phase {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 22rpx;
+  color: #9A8B72;
+  letter-spacing: 2rpx;
+}
+
+.panel-phase-ok {
+  color: #5A7A4E;
+}
+
+.panel-phase-warn {
+  color: #A04A3C;
+}
+
+.panel-progress {
+  height: 6rpx;
+  background: #EDE6D6;
+  border-radius: 3rpx;
+  overflow: hidden;
+}
+
+.panel-progress-fill {
+  height: 100%;
+  border-radius: 3rpx;
+  transition: width 0.4s ease;
+}
+
+.panel-fill-ok {
+  background: #5A7A4E;
+}
+
+.panel-fill-warn {
+  background: #A04A3C;
+}
+
+.panel-stats {
+  display: flex;
+  align-items: center;
+  gap: 24rpx;
+  margin-top: 16rpx;
+}
+
+.panel-stat {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 22rpx;
+  color: #9A8B72;
+  letter-spacing: 1rpx;
+}
+
+.panel-stat.panel-ok {
+  color: #5A7A4E;
+}
+
+.panel-stat.panel-warn {
+  color: #A04A3C;
+}
+
+.panel-stat.panel-pct {
+  margin-left: auto;
+  color: #6B5D4A;
+}
+
+/* ============================================================
+   我的例程入口（2026-10 第一梯隊·項2）：複用 examples 佈局，
+   例程 chip 以實底與常問話語區分；長按刪除
+   ============================================================ */
+
+.routines-block {
+  padding-top: 0;
+}
+
+.routine-chip {
+  background: #F4EEE1;
+  border-color: #B8A97F;
+}
+
+/* ============================================================
+   寫操作確認卡（2026-10 第二梯隊·項C，借鑑 Muse 審批卡）：
+   脱敏明細行 + 雙按鈕；處理後轉回執態（降透明度）
+   ============================================================ */
+
+.confirm-card {
+  border-color: #B8A97F;
+}
+
+.confirm-card-done {
+  opacity: 0.68;
+}
+
+.confirm-line {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 24rpx;
+  color: #6B5D4A;
+  line-height: 1.7;
+  letter-spacing: 1rpx;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 16rpx;
+  margin-top: 20rpx;
+}
+
+.confirm-actions .copy-btn {
+  flex: 1;
+  margin: 0;
+  text-align: center;
+}
+
+.confirm-btn-primary {
+  flex: 1;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 24rpx;
+  font-weight: 600;
+  color: #FFFDF8;
+  letter-spacing: 2rpx;
+  background: #8B7355;
+  border: 1rpx solid #8B7355;
+  border-radius: 6rpx;
+  padding: 10rpx 28rpx;
   text-align: center;
 }

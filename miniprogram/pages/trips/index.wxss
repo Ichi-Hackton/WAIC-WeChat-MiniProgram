@@ -360,6 +360,86 @@ page {
   border-radius: 6rpx;
 }
 
+/* ============================================================
+   餘票監控（2026-10 第二梯隊·項A：首頁售罄車次加入，雲端 tick 掃描）
+   ============================================================ */
+
+.monitor-block {
+  margin-top: 12rpx;
+}
+
+.monitor-title {
+  margin-bottom: 16rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 24rpx;
+  letter-spacing: 4rpx;
+  color: #6B5D4A;
+}
+
+.monitor-row {
+  background: #FCFAF5;
+  border: 1rpx solid #E8E0D0;
+  border-radius: 8rpx;
+  padding: 22rpx 24rpx;
+  margin-bottom: 16rpx;
+  display: flex;
+  align-items: center;
+}
+
+.monitor-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.monitor-label {
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 26rpx;
+  font-weight: 500;
+  letter-spacing: 1rpx;
+  color: #2B2018;
+}
+
+/* 掃描結論 / 命中詳情（自然換行，字數不受限） */
+.monitor-msg {
+  margin-top: 8rpx;
+  font-size: 20rpx;
+  line-height: 1.7;
+  color: #6B5D4A;
+  word-break: break-all;
+}
+
+.monitor-status {
+  flex-shrink: 0;
+  margin-left: 16rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  letter-spacing: 2rpx;
+}
+
+/* 監控中（灰調等待）/ 已命中（綠系終態，與已成交徽章同源） */
+.monitor-waiting { color: #9A8B72; }
+.monitor-hit { color: #6B7A5A; }
+
+/* 刪除入口（hairline 描邊細字，與 trip-remove 同族縮小版） */
+.monitor-remove {
+  flex-shrink: 0;
+  margin-left: 16rpx;
+  padding: 8rpx 18rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  letter-spacing: 2rpx;
+  color: #A04A3C;
+  border: 1rpx solid #D8BCB2;
+  border-radius: 6rpx;
+}
+
+.monitor-hint {
+  margin-top: 4rpx;
+  font-size: 20rpx;
+  line-height: 1.8;
+  color: #B8AB93;
+}
+
 .btn-hover {
   opacity: 0.5;
 }

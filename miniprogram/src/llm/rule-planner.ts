@@ -133,9 +133,38 @@ function extractCabin(intent: string): string {
 
 /** 從意圖識別飲品名（缺省拿鐵） */
 function extractDrink(intent: string): string {
+  if (/生椰/.test(intent)) return '生椰拿鐵';
   if (/美式/.test(intent)) return '美式咖啡';
   if (/摩卡/.test(intent)) return '摩卡';
   return '拿鐵';
+}
+
+/** 「從 X 到/去/回 Y」起終點提取（打車域；無出發點時 from 缺省——由定位或上游地點檢索兜底） */
+function extractRideRoute(intent: string): { from?: string; to?: string } | null {
+  const full = intent.match(/(?:从|從)([^，。,.!?！？去到回]{1,15}?)(?:到|去|回)([^，。,.!?！？]{1,15})/);
+  if (full) return { from: full[1].trim(), to: full[2].trim() };
+  const toOnly = intent.match(/(?:到|去|回)([^，。,.!?！？]{1,15})/);
+  if (toOnly) return { to: toOnly[1].trim() };
+  return null;
+}
+
+/** 從意圖抽取「XX 附近」的鄰近地標（酒店搜索的 poiName；如「西湖附近」→ 西湖） */
+function extractNearbyPoi(intent: string): string | undefined {
+  const m = intent.match(/([\u4e00-\u9fa5A-Za-z0-9]{2,10})(?:附近|周[邊边])/);
+  const poi = m?.[1]?.trim();
+  // 排除城市名（「杭州市中心附近」的杭州歸 destName 而非 poiName）
+  if (poi && !CITIES.includes(poi)) return poi;
+  return undefined;
+}
+
+/** 中文 / 阿拉伯數字 → 晚數（缺省 1 晚；酒店 checkOut = checkIn + 晚數） */
+function extractNights(intent: string): number {
+  const m = intent.match(/([一两二三四五六七八九十\d]+)[晚夜]/);
+  if (!m) return 1;
+  const raw = m[1];
+  if (/^\d+$/.test(raw)) return Math.min(Math.max(parseInt(raw, 10), 1), 30);
+  const cnMap: Record<string, number> = { 一: 1, 两: 2, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+  return cnMap[raw] ?? 1;
 }
 
 /** 商品關鍵詞 → [productId, 商品名]（與商城演示商品表對齊） */
@@ -193,6 +222,46 @@ function extractTicketKeyword(intent: string): string | null {
     if (re.test(intent)) return keyword;
   }
   return null;
+}
+
+/**
+ * 電話號碼提取樣式（按優先級；\b 邊界保證「20261015」類 8 位日期 /
+ * 18 位證件號的連續數字串不會被 5-6 位短號分支截取命中）：
+ *   1. 手機號（1[3-9] 開頭 11 位）
+ *   2. 座機（區號 3-4 位 + 連字符 + 7-8 位）
+ *   3. 400 熱線（400[-]3-4 位[-]3-4 位）
+ *   4. 公共熱線短號（5-6 位：10086 / 12306 / 12356 / 95xxx 等）
+ */
+const PHONE_PATTERNS: RegExp[] = [
+  /\b1[3-9]\d{9}\b/,
+  /\b\d{3,4}-\d{7,8}\b/,
+  /\b400-?\d{3,4}-?\d{3,4}\b/,
+  /\b\d{5,6}\b/,
+];
+
+/** 從意圖提取電話號碼（未提取到返回 null；與 SKILL 端 PHONE_RE 形態對齊） */
+function extractPhoneNumber(intent: string): string | null {
+  for (const re of PHONE_PATTERNS) {
+    const m = intent.match(re);
+    if (m) return m[0];
+  }
+  return null;
+}
+
+/** 郵箱地址形態（與 SKILL 端 EMAIL_RE 對齊） */
+const EMAIL_PATTERN = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/;
+
+/** 從意圖提取郵箱地址（未提取到返回 null） */
+function extractEmailAddress(intent: string): string | null {
+  const m = intent.match(EMAIL_PATTERN);
+  return m ? m[0] : null;
+}
+
+/** 從意圖提取郵件正文（「說 / 說的是」之後的內容；未點名返回 null） */
+function extractMailBody(intent: string): string | null {
+  const m = intent.match(/[說说](?:的是)?\s*(.+)$/);
+  const body = m?.[1]?.trim();
+  return body ? body.slice(0, 500) : null;
 }
 
 /**
@@ -457,6 +526,61 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     };
   }
 
+  // 設備通訊域短路（2026-10 撥打電話 / 發郵件）：必須先於各業務域判定
+  // ——「撥打 12306 熱線」「打 10086 客服電話」攜帶 12306 / 客服等域詞，
+  // 若不短路會誤觸發 wantsTrain 等域規則產生錯誤查票任務（與支付短路
+  // 同構的短路理由）。號碼 / 郵箱缺失時以追問收斂（號碼必須來自用戶
+  // 原文，嚴禁猜測）；本地設備能力離線可用，開發模式降級路徑同樣可達
+  const wantsPhone = /打電話|撥打|拨打|撥號|拨号|致電|致电|電話|电话/.test(intent);
+  const wantsMail = /發[封個一]?郵件|发[封个一]?邮件|寫郵件|写邮件/.test(intent);
+  if (wantsPhone && !wantsMail) {
+    const phoneNumber = extractPhoneNumber(intent);
+    if (!phoneNumber) {
+      return {
+        tasks: [],
+        message: '請告訴我要撥打的電話號碼（如 10086、12306 熱線或 11 位手機號）。',
+      };
+    }
+    return {
+      intent,
+      tasks: [
+        {
+          skillId: 'skill.device.comm',
+          action: 'dial_phone',
+          input: { phoneNumber },
+          inputBindings: {},
+          dependsOn: [],
+          summary: `撥打電話 ${phoneNumber}`,
+        },
+      ],
+      message: '',
+    };
+  }
+  if (wantsMail) {
+    const to = extractEmailAddress(intent);
+    if (!to) {
+      return {
+        tasks: [],
+        message: '請告訴我收件人的郵箱地址（如 name@example.com），我再幫你準備郵件。',
+      };
+    }
+    const body = extractMailBody(intent);
+    return {
+      intent,
+      tasks: [
+        {
+          skillId: 'skill.device.comm',
+          action: 'send_mail',
+          input: { to, ...(body ? { body } : {}) },
+          inputBindings: {},
+          dependsOn: [],
+          summary: `發送郵件到 ${to}`,
+        },
+      ],
+      message: '',
+    };
+  }
+
   // 行程複合意圖（「什麼時候去什麼地方幹什麼」）：短路於單域判定之前。
   // isTripIntent 已排除交通域詞（含高鐵 / 機票詞的意圖走下方單域分支，
   // 天然互斥防雙觸發）；票務詞在行程語境下歸屬活動子任務組，
@@ -496,8 +620,28 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   const wantsTrain = /高[铁鐵]|动[车車]|火[车車]|[车車][次票]|12306/.test(intent);
   // 機票域：域詞命中（「飛」單字歧義大，僅收「飛往 / 坐飛 / 搭機」等組合詞）
   const wantsFlight = /機票|机票|航班|飛機|飞机|飛往|飞往|搭機|搭机|坐飛|坐飞/.test(intent);
-  // 「咖啡(?!豆)」：買咖啡豆屬購物域，避免與商城 SKILL 雙觸發
-  const wantsCoffee = /星巴克|咖啡(?!豆)|拿[铁鐵]|美式|摩卡/.test(intent);
+  // 麥當勞域（2026-10-14 真實下單接入）：域詞命中即承接，須在
+  // wantsCoffee 之前判定——「麥當勞拿鐵 / M記咖啡」等混合詞歸本域
+  // 而非星巴克咖啡域（真實點餐 vs 跳轉模式的分流）
+  const wantsMcd = /麥當勞|麦当劳|[mM]記|[mM]记|巨無霸|巨无霸|麥辣|麦辣|麥樂|麦乐|板燒|板烧|得來速|得来速/.test(intent);
+  // 瑞幸域（2026-10-14 真實點單接入）：「瑞幸」品牌詞與「生椰拿鐵」等
+  // 瑞幸標誌性單品詞命中；優先於星巴克（「瑞幸拿鐵」歸瑞幸而非星巴克）
+  const wantsLuckin = /瑞幸|生椰|[橙橙][Cc]美式/.test(intent);
+  // 「咖啡(?!豆)」：買咖啡豆屬購物域，避免與商城 SKILL 雙觸發；
+  // 麥當勞 / 瑞幸語境排他（見各自域定義；無品牌詞的「來杯咖啡」仍歸星巴克）
+  const wantsCoffee = !wantsMcd && !wantsLuckin && /星巴克|咖啡(?!豆)|拿[铁鐵]|美式|摩卡/.test(intent);
+  // 打車域（2026-10-14 滴滴 MCP 接入）：市內出行；與火車 / 機票域詞
+  // 無重疊（高鐵/動車/火車 vs 打車/滴滴/叫車）天然互斥
+  const wantsRide = /打[车車]|滴滴|叫[车車]|叫[一]?[趟部]|網[約约][車车]|网约车|快[车車]|專[车車]|专[车車]/.test(intent);
+  // 飛豬旅行域（2026-10-14 飛豬 FlyAI MCP 接入）：酒店 / 住宿 / 民宿 /
+  // 訂房 / 行程規劃詞；機票 / 航班詞歸機票域、火車詞歸 12306 域（飛豬
+  // MCP 亦有 search_flight / search_domestic_train，詞級互斥不接入）；
+  // 點名「飛豬」+ 規劃詞也歸此域（ai_search 全域推薦）
+  const wantsFliggy =
+    !wantsTrain &&
+    !wantsFlight &&
+    (/飛豬|飞猪|酒店|住宿|民宿|客栈|客棧|訂房|订房|住.{0,3}[晚夜]/.test(intent) ||
+      (/飛豬|飞猪/.test(intent) && /推薦|推荐|攻略|規劃|规划|怎[麼么]玩|怎么玩|行程/.test(intent)));
   // 買 / 訂 / 下單 / 來一杯 / 幫我點 / 預約 均視為寫入意圖（觸發寫操作任務）。
   // 「預約」必須在此收錄：預約域的 create_reservation 以買詞為觸發條件，
   // 漏收會導致「預約明天羽毛球場地」只查時段不建預約卡（雙字組合收錄，
@@ -540,6 +684,10 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   const wantsNearby =
     /附近|周[邊边]|最近|哪[裡里]有|有[没沒]有/.test(intent) &&
     !wantsCoffee &&
+    !wantsMcd &&
+    !wantsLuckin &&
+    !wantsRide &&
+    !wantsFliggy &&
     !wantsShopping &&
     !wantsBooking &&
     !wantsTicket &&
@@ -678,6 +826,167 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
         },
         dependsOn: [searchTaskId],
         summary: `下單一杯${drink}（需確認，跳轉星巴克完成）`,
+      });
+    }
+  }
+
+  // 麥當勞域（2026-10-14 真實下單）：查門市 →（買詞時）真實下單。
+  // items 缺省時雲端自動選「人氣熱賣」首品（卡面 autoPicked 標註）；
+  // 下單不扣款（支付由用戶掃碼完成），未支付前可隨時取消，
+  // rollback 安全网完整故不設確認彈窗（最小打擾，Agent.md § 7.1）
+  if (wantsMcd) {
+    const city = ctx.userProfile.location?.city ?? '上海';
+    const searchTaskId = `task_${padTaskNo(tasks.length + 1)}`;
+    tasks.push({
+      skillId: 'skill.food.mcdonalds',
+      action: 'search_mcd_store',
+      input: { city, limit: 5 },
+      inputBindings: {},
+      dependsOn: [],
+      summary: `查詢${city}附近的麥當勞門市`,
+    });
+
+    if (wantsBuy) {
+      tasks.push({
+        skillId: 'skill.food.mcdonalds',
+        action: 'place_mcd_order',
+        input: {},
+        inputBindings: {
+          storeId: { fromTaskId: searchTaskId, fromField: 'data.stores.0.storeId' },
+        },
+        dependsOn: [searchTaskId],
+        summary: '真實下單麥當勞（自動選人氣熱賣，未支付前可取消）',
+      });
+    }
+  }
+
+  // 瑞幸域（2026-10-14 真實點單）：查店 →（買詞時）搜商品 → 真實下單三任務鏈。
+  // productId/skuCode 由搜尋任務綁定注入（真實 Token 下整鏈真實可用）；
+  // 下單需確認（上游明令復述確認），checkpoint 展示門店 / 商品 / 價格
+  if (wantsLuckin) {
+    const loc = ctx.userProfile.location;
+    const lat = loc?.lat ?? 31.2304; // 上海人民廣場兜底（查店為只讀演示）
+    const lng = loc?.lng ?? 121.4737;
+    const city = loc?.city ?? '上海';
+    const searchTaskId = `task_${padTaskNo(tasks.length + 1)}`;
+    tasks.push({
+      skillId: 'skill.coffee.luckin',
+      action: 'search_luckin_store',
+      input: { lat, lng, city, limit: 3 },
+      inputBindings: {},
+      dependsOn: [],
+      summary: `查詢${city}附近的瑞幸門店`,
+    });
+
+    if (wantsBuy) {
+      const drink = extractDrink(intent);
+      const productTaskId = `task_${padTaskNo(tasks.length + 1)}`;
+      tasks.push({
+        skillId: 'skill.coffee.luckin',
+        action: 'search_luckin_product',
+        input: { query: drink },
+        inputBindings: {
+          deptId: { fromTaskId: searchTaskId, fromField: 'data.stores.0.deptId' },
+        },
+        dependsOn: [searchTaskId],
+        summary: `搜尋${drink}的商品與價格`,
+      });
+      tasks.push({
+        skillId: 'skill.coffee.luckin',
+        action: 'place_luckin_order',
+        input: { quantity: 1 },
+        inputBindings: {
+          deptId: { fromTaskId: searchTaskId, fromField: 'data.stores.0.deptId' },
+          storeName: { fromTaskId: searchTaskId, fromField: 'data.stores.0.name' },
+          // 平鋪單品欄位（雲端組裝為 productList；陣列內字段不支援綁定注入）
+          productId: { fromTaskId: productTaskId, fromField: 'data.products.0.productId' },
+          skuCode: { fromTaskId: productTaskId, fromField: 'data.products.0.skuCode' },
+          productName: { fromTaskId: productTaskId, fromField: 'data.products.0.name' },
+        },
+        dependsOn: [productTaskId],
+        summary: `下單一杯${drink}（需確認，掃碼支付）`,
+      });
+    }
+  }
+
+  // 打車域（2026-10-14 滴滴 MCP）：預估 →（非純問價時）真實叫車。
+  // 起終點從「從 X 到 Y」提取；目的地缺失時追問（叫車不可無目的地）。
+  // 無價格疑問詞的打車意圖默認叫車（「打車多少錢」僅預估）
+  if (wantsRide) {
+    const route = extractRideRoute(intent);
+    if (!route?.to) {
+      return { tasks: [], message: '請問目的地是哪裡？例如「從國貿打車到三里屯」或「打車去機場」' };
+    }
+    const loc = ctx.userProfile.location;
+    const ridePriceOnly = /多少|價格|价格|[貴贵]/.test(intent);
+    const estimateTaskId = `task_${padTaskNo(tasks.length + 1)}`;
+    tasks.push({
+      skillId: 'skill.ride.didi',
+      action: 'estimate_ride',
+      input: {
+        fromName: route.from ?? '當前位置',
+        toName: route.to,
+        // fromCity 為滴滴地圖檢索必填（上游 required schema）：定位城市優先，
+        // 無定位時兜底北京市（與 mock 口徑一致，跨城意圖由 LLM 路徑顯式傳 toCity）
+        fromCity: loc?.city ?? '北京市',
+        ...(loc && !route.from ? { fromLng: loc.lng, fromLat: loc.lat } : {}),
+      },
+      inputBindings: {},
+      dependsOn: [],
+      summary: `預估 ${route.from ?? '當前位置'} → ${route.to} 的車型與價格`,
+    });
+
+    if (!ridePriceOnly) {
+      tasks.push({
+        skillId: 'skill.ride.didi',
+        action: 'place_ride',
+        input: {},
+        inputBindings: {
+          estimateTraceId: { fromTaskId: estimateTaskId, fromField: 'data.traceId' },
+          productCategory: { fromTaskId: estimateTaskId, fromField: 'data.options.0.productCategory' },
+          productName: { fromTaskId: estimateTaskId, fromField: 'data.options.0.productName' },
+        },
+        dependsOn: [estimateTaskId],
+        summary: `叫車：${route.from ?? '當前位置'} → ${route.to}（需確認車型與價格）`,
+      });
+    }
+  }
+
+  // 飛豬旅行域（2026-10-14 FlyAI MCP 接入）：結構化酒店搜索 + AI 行程推薦。
+  // 只讀域（飛豬 MCP 本期僅開放搜索）：詳情鏈接由用戶自行在飛豬 App 完成預訂；
+  // 目的地取「最後一個城市」（「從北京去杭州住酒店」的杭州為到達地）
+  if (wantsFliggy) {
+    const aiPlanOnly =
+      !/酒店|住宿|民宿|客栈|客棧|訂房|订房/.test(intent) &&
+      /推薦|推荐|攻略|規劃|规划|怎[麼么]玩|怎么玩|行程/.test(intent);
+    if (aiPlanOnly) {
+      tasks.push({
+        skillId: 'skill.travel.fliggy',
+        action: 'ai_search',
+        input: { query: intent },
+        inputBindings: {},
+        dependsOn: [],
+        summary: '飛豬 AI 旅行推薦（上游 LLM 生成，卡片帶 ai_generated 標識）',
+      });
+    } else {
+      const dest = cities[cities.length - 1] ?? ctx.userProfile.location?.city ?? '上海';
+      const poi = extractNearbyPoi(intent);
+      const nights = extractNights(intent);
+      const checkInDate = extractDate(intent);
+      const checkOutDate = formatDate(addDays(new Date(`${checkInDate}T00:00:00`), nights));
+      tasks.push({
+        skillId: 'skill.travel.fliggy',
+        action: 'search_hotels',
+        input: {
+          destName: dest,
+          ...(poi ? { poiName: poi } : {}),
+          checkInDate,
+          checkOutDate,
+          limit: 5,
+        },
+        inputBindings: {},
+        dependsOn: [],
+        summary: `搜索${dest}${poi ? `${poi}附近` : ''}的酒店（${checkInDate} 入住 ${nights} 晚）`,
       });
     }
   }
@@ -837,11 +1146,40 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     });
   }
 
-  // 附近地點搜尋：只讀單任務；座標寫字面值（與天氣分支同構）。
+  // 附近地點搜尋：只讀單任務；查詢中心寫字面值（與天氣分支同構）。
   // 品類詞提取失敗（「附近有什麼」類泛問）→ 追問品類，不硬猜關鍵詞；
-  // wantsNearby 已排他全部專屬域，此處直接收斂不影響後續分支
+  // wantsNearby 已排他全部專屬域，此處直接收斂不影響後續分支。
+  // 家語義優先（2026-10-14 擴展，同日修訂）：「我家 / 家附近 / 我的收貨地址」
+  // 取地址簿默認收貨地址（ctx.homeAddress.full，search_poi 地址中心模式，
+  // 雲端正向編碼）——用戶明確區分「家」與「當前定位」（badcase：「？我家，
+  // 不是我定位附近」）。定位仍是無地點限定時的默認中心（「附近」→座標）；
+  // 用戶口述的具體地址（「XX路附近」）由 LLM 主鏈路提取，規則路徑不硬解
+  const homeAddr = ctx.userProfile.homeAddress;
   const nearbyLoc = ctx.userProfile.location;
-  if (wantsNearby && nearbyLoc?.lat !== undefined && nearbyLoc?.lng !== undefined) {
+  const wantsHomeNearby = /我家|家[裡里]附近|住[家處处]附近|收[货貨]地址/.test(intent);
+  if (wantsNearby && wantsHomeNearby) {
+    if (!homeAddr) {
+      return {
+        tasks: [],
+        message: '還不知道你家的地址～可到「我的 → 收貨地址」添加默認收貨地址，或直接告訴我小區 / 街道名，我再幫你找附近的店。',
+      };
+    }
+    const homeKeyword = extractNearbyKeyword(intent);
+    if (!homeKeyword) {
+      return {
+        tasks: [],
+        message: '想找你家附近什麼地點？例如便利店、藥店、快遞驛站……告訴我品類，我幫你查最近的。',
+      };
+    }
+    tasks.push({
+      skillId: 'skill.map.tianditu',
+      action: 'search_poi',
+      input: { keyword: homeKeyword, address: homeAddr.full },
+      inputBindings: {},
+      dependsOn: [],
+      summary: `搜尋${homeAddr.city}家中附近的${homeKeyword}`,
+    });
+  } else if (wantsNearby && nearbyLoc?.lat !== undefined && nearbyLoc?.lng !== undefined) {
     const poiKeyword = extractNearbyKeyword(intent);
     if (!poiKeyword) {
       return {
@@ -926,4 +1264,5 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
 export const UNSUPPORTED_HINT =
   '尚未支援此意圖。目前可辦：高鐵車次查詢與跳轉 12306 購票、國內航班查詢與跳轉 OTA 購票、' +
   '實時天氣查詢、附近地點搜尋（便利店 / 藥店 / 列印店等）、星巴克門市查詢與點單、商品搜尋與加購結算、' +
-  '生活服務預約、演出票務搜尋與購票、情感陪伴對話、待支付訂單聚合引導，以及一句話出行行程規劃。';
+  '生活服務預約、演出票務搜尋與購票、情感陪伴對話、待支付訂單聚合引導、撥打電話與發郵件（複製引導發送），' +
+  '以及一句話出行行程規劃。';

@@ -18,6 +18,7 @@
       <text>{{stateLabel}}</text>
     </view>
     <view class="profile-btn" hover-class="btn-hover" bindtap="onTapTrips">行程</view>
+    <view class="profile-btn" hover-class="btn-hover" bindtap="onTapSkillCenter">技能</view>
     <view class="profile-btn" hover-class="btn-hover" bindtap="onTapProfile">我的</view>
     <view class="reset-btn" hover-class="btn-hover" bindtap="onTapReset">重置</view>
   </view>
@@ -48,8 +49,46 @@
           <view wx:if="{{item.cards && item.cards.length > 0}}" class="cards">
             <block wx:for="{{item.cards}}" wx:for-item="card" wx:key="key">
 
+              <!-- 執行工作面板卡（項4）：進度條 + 階段文案 + 三態統計，
+                  隨任務事件就地更新（統計由同消息步驟卡狀態推算） -->
+              <view wx:if="{{card.type === 'panel'}}" class="card-delivery panel-card">
+                <view class="panel-head">
+                  <text class="delivery-title">執行進度</text>
+                  <text class="panel-phase {{card.failed > 0 ? 'panel-phase-warn' : (card.percent >= 100 ? 'panel-phase-ok' : '')}}">{{card.phaseLabel}}</text>
+                </view>
+                <view class="panel-progress">
+                  <view class="panel-progress-fill {{card.failed > 0 ? 'panel-fill-warn' : 'panel-fill-ok'}}" style="width: {{card.percent}}%;"></view>
+                </view>
+                <view class="panel-stats">
+                  <text class="panel-stat">共 {{card.total}} 步</text>
+                  <text class="panel-stat panel-ok">{{card.done - card.failed}} 成功</text>
+                  <text wx:if="{{card.failed > 0}}" class="panel-stat panel-warn">{{card.failed}} 未完成</text>
+                  <text class="panel-stat panel-pct">{{card.percent}}%</text>
+                </view>
+              </view>
+
+              <!-- 寫操作確認卡（第二梯隊·項C，借鑑 Muse 審批卡）：脱敏明細 +
+                  雙按鈕；點按後卡片轉回執態留在聊天流（審計能見度：可回看
+                  當時確認了什麼）。確認拒絕均回傳 scheduler，下游級聯跳過 -->
+              <view wx:elif="{{card.type === 'confirm'}}" class="card-delivery confirm-card {{card.status !== 'pending' ? 'confirm-card-done' : ''}}">
+                <view class="order-head">
+                  <text class="order-mark">·</text>
+                  <text class="delivery-title">{{card.status === 'pending' ? card.title : (card.status === 'approved' ? '已確認 ✓' : '已取消')}}</text>
+                </view>
+                <view class="order-body">
+                  <view wx:for="{{card.detailLines}}" wx:for-index="lineIdx" wx:key="lineIdx" class="confirm-line">
+                    <text>{{item}}</text>
+                  </view>
+                  <view wx:if="{{card.status === 'pending'}}" class="confirm-actions">
+                    <view class="copy-btn" hover-class="btn-hover" bindtap="onRejectCheckpoint" data-msg-id="{{item.id}}">取消</view>
+                    <view class="confirm-btn-primary" hover-class="btn-hover" bindtap="onApproveCheckpoint" data-msg-id="{{item.id}}">{{card.confirmText}}</view>
+                  </view>
+                  <text wx:else class="memory-note">{{card.status === 'approved' ? '已同意執行（若為跳轉類下單，請在渠道側完成支付）' : '已取消此操作，後續依賴步驟將跳過'}}</text>
+                </view>
+              </view>
+
               <!-- 車次交付卡：大字路線頭 + 左右分欄班次行，每班掛快捷預訂 -->
-              <view wx:if="{{card.type === 'train'}}" class="card-delivery">
+              <view wx:elif="{{card.type === 'train'}}" class="card-delivery">
                 <view class="route-head">
                   <view class="route">
                     <text class="route-city">{{card.routeFrom}}</text>
@@ -79,7 +118,8 @@
                     <view class="train-act">
                       <text class="train-price">{{t.priceLabel}}</text>
                       <view wx:if="{{!t.soldOut}}" class="book-btn" hover-class="btn-hover" bindtap="onTapBookTrain" data-train-no="{{t.trainNo}}" data-ctx="{{card.bookCtx}}">預訂</view>
-                      <view wx:else class="book-btn book-btn-off">無票</view>
+                      <!-- 售罄行「監控」入口（第二梯隊·項A）：創建餘票條件監控，命中經行程頁 / 訂閱消息告知 -->
+                      <view wx:else class="book-btn book-btn-monitor" hover-class="btn-hover" bindtap="onMonitorTrain" data-train-no="{{t.trainNo}}" data-ctx="{{card.bookCtx}}">監控</view>
                     </view>
                   </view>
                 </view>
@@ -173,6 +213,23 @@
                 </view>
               </view>
 
+              <!-- 動態技能交付卡（受控展示協議）：display 標題/明細行 + AI
+                  生成標識；補充文字僅在無明細行時透出（不暴露 raw JSON） -->
+              <view wx:elif="{{card.type === 'dynamic'}}" class="card-delivery">
+                <view class="order-head">
+                  <text class="order-mark">·</text>
+                  <text class="delivery-title">{{card.title}}</text>
+                  <view wx:if="{{card.aiGenerated}}" class="ai-tag">AI 生成</view>
+                </view>
+                <view wx:if="{{card.lines.length > 0}}" class="order-body">
+                  <view wx:for="{{card.lines}}" wx:for-item="line" wx:key="label" class="order-line">
+                    <text class="order-label">{{line.label}}</text>
+                    <text class="order-value">{{line.value}}</text>
+                  </view>
+                </view>
+                <view wx:if="{{card.text}}" class="memory-note">{{card.text}}</view>
+              </view>
+
               <!-- 記憶卡（分層記憶）：推斷提議——確認卡詢問「以後都這樣
                   做嗎？」，點「記住」落盤、「不用了」丟棄且同值不再重複詢問；
                   顯式已記住——直接以回執態透出（無按鈕，告知而非詢問） -->
@@ -190,6 +247,75 @@
                   <view wx:if="{{card.status === 'pending'}}" class="memory-actions">
                     <view class="copy-btn" hover-class="btn-hover" bindtap="onDismissMemory" data-msg-id="{{item.id}}">不用了</view>
                     <view class="pay-btn" hover-class="btn-hover" bindtap="onConfirmMemory" data-msg-id="{{item.id}}">記住</view>
+                  </view>
+                </view>
+              </view>
+
+              <!-- 個人資料保存卡（對話捕獲）：推斷提議確認卡（suggested）點
+                  「保存」以卡面條目回傳落盤（所見即所寫，證號卡面脫敏）；
+                  顯式回執 / 校驗告知（remembered / invalid）無按鈕透出 -->
+              <view wx:elif="{{card.type === 'profile'}}" class="card-delivery">
+                <view class="order-head">
+                  <text class="order-mark">·</text>
+                  <text class="delivery-title">{{card.status === 'pending' ? '保存以下個人資料嗎？' : (card.status === 'confirmed' ? '已處理 ✓' : '已取消')}}</text>
+                </view>
+                <view class="order-body">
+                  <view wx:for="{{card.entries}}" wx:for-item="entry" wx:key="key" class="profile-entry">
+                    <text class="entry-kind">{{entry.label}}</text>
+                    <view wx:for="{{entry.lines}}" wx:for-item="line" wx:key="label" class="order-line">
+                      <text class="order-label">{{line.label}}</text>
+                      <text class="order-value">{{line.value}}</text>
+                    </view>
+                    <text wx:if="{{entry.note}}" class="memory-note {{entry.status === 'invalid' ? 'profile-invalid' : ''}}">{{entry.note}}</text>
+                  </view>
+                  <text wx:if="{{card.status === 'pending'}}" class="memory-note">點「保存」後存於本機（證號加密），之後下單自動帶入</text>
+                  <view wx:if="{{card.status === 'pending'}}" class="memory-actions">
+                    <view class="copy-btn" hover-class="btn-hover" bindtap="onDismissProfile" data-msg-id="{{item.id}}">不用了</view>
+                    <view class="pay-btn" hover-class="btn-hover" bindtap="onConfirmProfile" data-msg-id="{{item.id}}">保存</view>
+                  </view>
+                </view>
+              </view>
+
+              <!-- 能力缺口提案卡（規劃缺口 → 引導鍛造）：缺失能力 + 建議
+                  描述 + 「去技能中心起草」入口（點擊預填需求；提交前確認
+                  去敏語義——缺口只產生提案，不自動發送 forge） -->
+              <view wx:elif="{{card.type === 'gap'}}" class="card-delivery">
+                <view class="order-head">
+                  <text class="order-mark">·</text>
+                  <text class="delivery-title">暫時辦不到：缺少「{{card.skillName}}」能力</text>
+                </view>
+                <view class="order-body">
+                  <view class="order-line">
+                    <text class="order-label">建議</text>
+                    <text class="order-value">{{card.suggestion}}</text>
+                  </view>
+                  <view class="memory-actions">
+                    <view class="pay-btn" hover-class="btn-hover" bindtap="onTapForgeGap" data-intent="{{card.intent}}">去技能中心起草</view>
+                  </view>
+                </view>
+              </view>
+
+              <!-- 例程提議卡（項2，重複意圖固化）：流程摘要 + 口令 +
+                  「存例程」確認（點擊落盤，首頁例程區一鍵觸發）；
+                  「不用了」丟棄且同話語不再重複提議 -->
+              <view wx:elif="{{card.type === 'routine-save'}}" class="card-delivery">
+                <view class="order-head">
+                  <text class="order-mark">·</text>
+                  <text class="delivery-title">{{card.status === 'pending' ? '把這條流程存為例程嗎？' : (card.status === 'confirmed' ? '已存為例程 ✓' : '已取消')}}</text>
+                </view>
+                <view class="order-body">
+                  <view class="order-line">
+                    <text class="order-label">流程</text>
+                    <text class="order-value">{{card.label}}</text>
+                  </view>
+                  <view class="order-line">
+                    <text class="order-label">口令</text>
+                    <text class="order-value">{{card.text}}</text>
+                  </view>
+                  <text wx:if="{{card.status === 'pending'}}" class="memory-note">存為例程後，首頁「我的例程」一鍵觸發這條流程（規劃仍按當輪情況重新解析）</text>
+                  <view wx:if="{{card.status === 'pending'}}" class="memory-actions">
+                    <view class="copy-btn" hover-class="btn-hover" bindtap="onDismissRoutine" data-msg-id="{{item.id}}">不用了</view>
+                    <view class="pay-btn" hover-class="btn-hover" bindtap="onConfirmRoutine" data-msg-id="{{item.id}}">存例程</view>
                   </view>
                 </view>
               </view>
@@ -245,6 +371,21 @@
       class="example-chip"
       hover-class="btn-hover"
       bindtap="onTapExample"
+      data-text="{{item.text}}"
+    >{{item.label}}</view>
+  </view>
+
+  <!-- ═══ 我的例程（項2：點擊一鍵觸發流程，長按刪除；僅對話初始態顯示）═══ -->
+  <view wx:if="{{routineChips.length > 0 && messages.length <= 1 && !splash}}" class="examples routines-block">
+    <text class="examples-title">我的例程：</text>
+    <view
+      wx:for="{{routineChips}}"
+      wx:key="id"
+      class="example-chip routine-chip"
+      hover-class="btn-hover"
+      bindtap="onTapRoutine"
+      bindlongpress="onLongPressRoutine"
+      data-id="{{item.id}}"
       data-text="{{item.text}}"
     >{{item.label}}</view>
   </view>
