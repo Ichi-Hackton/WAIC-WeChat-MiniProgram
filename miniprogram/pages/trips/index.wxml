@@ -58,6 +58,20 @@
       </view>
     </view>
 
+    <!-- 完整性差距（第三梯隊·L4 試探）：可計算目標的缺項清單，只綁定本行程、
+         臨近窗口內完整展開；遠期收斂為一行提示（Daisy 教訓：不做泛泛待辦） -->
+    <view wx:if="{{item.expanded && item.checklist.length > 0}}" class="trip-checklist">
+      <view class="checklist-hint">{{item.checklistHint}}</view>
+      <view wx:for="{{item.checklist}}" wx:for-item="c" wx:key="key" class="check-row {{c.ok ? 'check-row-ok' : ''}}">
+        <text class="check-mark">{{c.ok ? '✓' : '✗'}}</text>
+        <text class="check-label">{{c.label}}</text>
+        <text wx:if="{{!c.ok}}" class="check-hint">{{c.hint}}</text>
+      </view>
+    </view>
+    <view wx:elif="{{item.expanded && item.checklistHint}}" class="trip-checklist trip-checklist-far">
+      <text class="checklist-hint">{{item.checklistHint}}</text>
+    </view>
+
     <!-- 豎向時間線：節點（時間標籤 + 任務標題 + 狀態徽章），完成項打勾 -->
     <view wx:if="{{item.expanded}}" class="trip-timeline">
       <view wx:for="{{item.timeline}}" wx:for-item="node" wx:for-index="nodeIdx" wx:key="taskId" class="tl-node">
@@ -79,27 +93,30 @@
         </view>
         <text class="tl-status tl-{{node.statusClass}}">{{node.statusLabel}}</text>
       </view>
-      <!-- 操作區：分享同伴（評審 #4 增長）/ 訂閱提醒（模板配置後渲染）/ 刪除 -->
+      <!-- 操作區：分享同伴（評審 #4 增長，生效中可撤銷）/ 訂閱提醒（模板配置後渲染）/ 刪除 -->
       <view class="trip-actions">
         <button class="tl-act-btn" open-type="share" data-id="{{item.id}}" hover-class="btn-hover">分享給同伴</button>
+        <view wx:if="{{item.shared}}" class="trip-remove" hover-class="btn-hover" bindtap="onTapRevokeShare" data-id="{{item.id}}">撤銷分享</view>
         <button wx:if="{{subReady}}" class="tl-act-btn {{item.subscribed ? 'tl-act-done' : ''}}" hover-class="btn-hover" bindtap="onTapSubscribe" data-id="{{item.id}}">{{item.subscribed ? '已訂閱提醒' : '訂閱出發提醒'}}</button>
         <view class="trip-remove" hover-class="btn-hover" bindtap="onTapRemove" data-id="{{item.id}}">刪除行程</view>
       </view>
     </view>
   </view>
 
-  <!-- ═══ 餘票監控（2026-10 第二梯隊·項A：首頁售罄車次加入，雲端定時 tick 掃描回寫）═══ -->
+  <!-- ═══ 條件監控（餘票 / 天氣 / 機票降價；首頁卡片入口建立，雲端定時 tick 掃描回寫）═══ -->
   <view wx:if="{{monitors.length > 0}}" class="monitor-block">
-    <view class="monitor-title">餘票監控</view>
+    <view class="monitor-title">條件監控</view>
     <view wx:for="{{monitors}}" wx:key="id" class="monitor-row">
       <view class="monitor-info">
         <view class="monitor-label">{{item.label}}</view>
         <view wx:if="{{item.lastMessage}}" class="monitor-msg">{{item.lastMessage}}</view>
       </view>
       <text class="monitor-status {{item.statusClass}}">{{item.statusLabel}}</text>
+      <!-- 命中直達（第二梯隊·項B/C）：餘票攜 monhit 跳首頁組裝預訂意圖（確認彈窗把關下單）；機票降價直達航班查詢 -->
+      <view wx:if="{{item.canBook}}" class="monitor-book" hover-class="btn-hover" bindtap="onTapMonitorBook" data-id="{{item.id}}">{{item.bookLabel}}</view>
       <view class="monitor-remove" hover-class="btn-hover" bindtap="onTapRemoveMonitor" data-id="{{item.id}}">刪除</view>
     </view>
-    <view class="monitor-hint">有票時經訂閱消息提醒；未訂閱或模板未配置時，回到此頁即可查看掃描結論。</view>
+    <view class="monitor-hint">命中時經訂閱消息提醒（需授權且模板已配置）；天氣監控僅在本頁展示掃描結論。</view>
   </view>
 
 </view>

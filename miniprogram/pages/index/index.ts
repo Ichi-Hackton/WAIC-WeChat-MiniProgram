@@ -42,8 +42,8 @@ import {
 import { getItem, setItem } from '../../src/services/storage';
 import { recordEvent } from '../../src/services/metrics';
 import { jumpExternal } from '../../src/services/jump';
-import { createMonitor } from '../../src/services/monitors';
-import { upsertMonitor } from '../../src/storage/monitors';
+import { createMonitor, fetchMyMonitors, type MonitorCloudItem } from '../../src/services/monitors';
+import { upsertMonitor, listMonitors } from '../../src/storage/monitors';
 import { DYN_SKILL_PREFIX } from '../../src/skills/dynamic';
 import { METRIC_NAMES } from '../../src/utils/metrics';
 import type { MetricName } from '../../src/utils/metrics';
@@ -124,6 +124,8 @@ interface FlightCard extends CardKey {
   moreLabel: string;
   /** 快捷預訂上下文（JSON 字串，wxml dataset 傳遞） */
   bookCtx: string;
+  /** 降價監控上下文（JSON 字串：from/to/date/cabin/lowestCent，卡片級入口） */
+  monitorCtx: string;
 }
 
 /** 跳轉下單交付卡：2026-10 跳轉模式寫操作的憑證（複製資訊 + 前往下單，
@@ -342,6 +344,10 @@ interface HomePageThis {
   deferredInitTimer?: ReturnType<typeof setTimeout>;
   /** 進行中的語音識別會話（null = 閒置） */
   voiceSession: VoiceRecognitionSession | null;
+  /** 監控命中落地去重（monhit → 上次處理時間；短窗口去重防 onShow 抖動重複 dispatch） */
+  monhitHandledAt: Map<string, number>;
+  /** 已消費（或已檢查）的 App 級進入事件序號——殘留 enter options 去重判據（見 onShow） */
+  monhitConsumedEnterSeq: number;
   nextMsgId: () => string;
   appendMessage: (msg: ChatMessage) => void;
   onAgentStateChange: (state: AgentState) => void;
@@ -367,6 +373,8 @@ interface HomePageThis {
   onTapBookTrain: (e: { currentTarget?: { dataset?: { trainNo?: string; ctx?: string } } }) => Promise<void>;
   /** 售罄車次行「監控」：創建餘票條件監控（第二梯隊·項A） */
   onMonitorTrain: (e: { currentTarget?: { dataset?: { trainNo?: string; ctx?: string } } }) => Promise<void>;
+  /** 監控命中直達（第二梯隊·項B）：訂閱消息 / 行程頁「去預訂」攜 monhit 落地後組裝預訂意圖 */
+  handleMonitorHit: (monitorId: string) => Promise<void>;
   onTapBookFlight: (e: { currentTarget?: { dataset?: { flightNo?: string; ctx?: string } } }) => Promise<void>;
   onTapCopyJumpInfo: (e: { currentTarget?: { dataset?: { text?: string } } }) => void;
   onTapJumpMini: (e: { currentTarget?: { dataset?: { appid?: string; path?: string } } }) => void;
@@ -648,6 +656,12 @@ function jumpToMiniProgram(appId: string, path: string): void {
 function getAgent(): AgentRuntime | null {
   const app = getApp() as unknown as { globalData?: { agent?: AgentRuntime } };
   return app?.globalData?.agent ?? null;
+}
+
+/** 讀取 App 級進入事件序號（App.onShow 遞增；0 = 尚未發生） */
+function readEnterEventSeq(): number {
+  const app = getApp() as unknown as { globalData?: { enterEventSeq?: number } };
+  return app?.globalData?.enterEventSeq ?? 0;
 }
 
 /** 交付卡動作 → 漏斗事件（2026-10 評審 #5：查票 → 購票卡 → 跳轉漏斗前兩級） */
@@ -1389,7 +1403,8 @@ function buildMailCard(data: unknown): GenericCard | null {
 function buildFlightCard(data: unknown): FlightCard | null {
   const d = data as { from?: unknown; to?: unknown; date?: unknown; flights?: unknown; source?: unknown } | undefined;
   if (!d || !Array.isArray(d.flights) || d.flights.length === 0) return null;
-  const cabinLabel = CABIN_LABELS[String((d.flights[0] as Record<string, unknown>).cabin ?? '')] ?? '經濟艙';
+  const cabin = String((d.flights[0] as Record<string, unknown>).cabin ?? 'economy');
+  const cabinLabel = CABIN_LABELS[cabin] ?? '經濟艙';
   const shown = d.flights.slice(0, TRAIN_CARD_LIMIT);
   const flights = shown.map((raw) => {
     const f = raw as Record<string, unknown>;
@@ -1406,6 +1421,12 @@ function buildFlightCard(data: unknown): FlightCard | null {
       priceLabel: priceCent > 0 ? formatPrice(priceCent) : '價格待詢',
     };
   });
+  // 降價監控基準快照：全量航班（含未展示班次）的最低有效價；無有效報價時
+  // 為 0（onMonitorFlight 據此攔截創建——無基準即無可計算的驗收口徑）
+  const pricedCents = (d.flights as Array<Record<string, unknown>>)
+    .map((f) => (typeof f.priceCent === 'number' ? f.priceCent : -1))
+    .filter((c) => c > 0);
+  const lowestCent = pricedCents.length > 0 ? Math.min(...pricedCents) : 0;
   return {
     type: 'flight',
     key: `flight-${String(d.from ?? '')}-${String(d.to ?? '')}-${String(d.date ?? '')}`,
@@ -1422,6 +1443,14 @@ function buildFlightCard(data: unknown): FlightCard | null {
       to: String(d.to ?? ''),
       date: String(d.date ?? ''),
       cabinLabel,
+    }),
+    // 降價監控上下文（卡片級，不針對單一航班：命中後選班決策留給用戶）
+    monitorCtx: JSON.stringify({
+      from: String(d.from ?? ''),
+      to: String(d.to ?? ''),
+      date: String(d.date ?? ''),
+      cabin,
+      lowestCent,
     }),
   };
 }
@@ -1524,6 +1553,11 @@ Page({
     self.succeededTaskLabels = [];
     self.deliveredTaskIds = new Set();
     self.voiceSession = null;
+    self.monhitHandledAt = new Map();
+    // 進入事件基準：本實例誕生時的進入事件視為已消費（冷啟動啟動 query
+    // 由下方 onLoad 統一處理），onShow 僅響應此後的新進入事件（見 onShow
+    // 的殘留快照防護）
+    self.monhitConsumedEnterSeq = readEnterEventSeq();
     logInfo(`${BRAND_NAME} 首頁載入`);
 
     // 快捷入口個人化：常用話語 Top N 優先，無記錄時回退出廠範例；例程
@@ -1605,6 +1639,14 @@ Page({
         logError('Agent runtime 未就緒（globalData.agent 缺失），對話功能不可用');
       }
     }, 0);
+
+    // 應用內 navigateTo 攜參直達（行程頁「去預訂 / 去查看」；2026-10 審計
+    // P1 修復）：navigateTo 的 query 僅經目標頁 onLoad 傳遞，不會更新
+    // getEnterOptionsSync 的 App 級進入快照——此處同步消費，跳轉直達鏈路
+    // 不再是死路。冷啟動訂閱消息的啟動 query 同樣經此入口（monitorId 為
+    // 純安全字符，encodeURIComponent 為 no-op，與 onShow 口徑一致）
+    const monhit = typeof query?.monhit === 'string' ? query.monhit.trim() : '';
+    if (monhit) void self.handleMonitorHit(monhit);
   },
 
   /**
@@ -1615,7 +1657,23 @@ Page({
    * 冷啟動首輪 onShow 早於歡迎語入場，提醒會排在歡迎語之前（優先級更高，可接受）。
    */
   onShow(): void {
-    (this as unknown as HomePageThis).remindDueTrips();
+    const self = this as unknown as HomePageThis;
+    self.remindDueTrips();
+    // 監控命中直達（第二梯隊·項B）：訂閱消息點擊進入。冷啟動啟動 query
+    // 已由 onLoad 消費，熱啟動僅觸發 onShow 不觸發 onLoad——經
+    // getEnterOptionsSync 取「本次進入」參數。
+    // 殘留快照防護（2026-10 審計 P2）：enter options 在兩次 App 級進入
+    // 事件之間保持不變——頁面往返（navigateTo 返回）觸發的 onShow 會讀到
+    // 舊通知參數造成重複 dispatch。以進入事件序號守衛：僅新進入事件（且
+    // 未消費過）才檢查 monhit；同一通知的重試經「再次點擊」（新事件）
+    // 仍可直達，行程頁按鈕（新頁面實例）為顯式重試入口
+    const seq = readEnterEventSeq();
+    if (seq !== self.monhitConsumedEnterSeq) {
+      self.monhitConsumedEnterSeq = seq;
+      const enter = wx.getEnterOptionsSync();
+      const monhit = typeof enter.query?.monhit === 'string' ? enter.query.monhit.trim() : '';
+      if (monhit) void self.handleMonitorHit(monhit);
+    }
   },
 
   /**
@@ -1781,6 +1839,158 @@ Page({
       logError('餘票監控創建失敗', err);
       wx.showToast({ title: '監控創建失敗，請稍後再試', icon: 'none' });
     }
+  },
+
+  /**
+   * 航班卡「監控降價」（第二梯隊·項C）：創建機票降價條件監控。降幅閾值
+   * 由用戶創建時經 actionSheet 指定（問題定義權在用戶），基準價取當前查詢
+   * 最低價快照；雲端 tick 按可計算口徑掃描（即時最低價 ≤ 基準 − 降幅），
+   * 命中推送落地直達航班查詢卡（選班與否的決策留給用戶）。
+   *
+   * 時序：訂閱授權必須先於 actionSheet——requestSubscribeMessage 需在 tap
+   * 同步調用鏈內觸發，actionSheet 回調後已脫離手勢上下文會靜默失敗。
+   */
+  async onMonitorFlight(this: HomePageThis, e: { currentTarget?: { dataset?: { ctx?: string } } }): Promise<void> {
+    const ctxRaw = e.currentTarget?.dataset?.ctx;
+    if (!ctxRaw) return;
+    try {
+      const ctx = JSON.parse(ctxRaw) as {
+        from?: string; to?: string; date?: string; cabin?: string; lowestCent?: number;
+      };
+      if (!ctx.from || !ctx.to || !ctx.date) return;
+      const baselineCent = typeof ctx.lowestCent === 'number' ? ctx.lowestCent : 0;
+      // 無有效報價時無基準可依（可計算的驗收口徑不存在），如實攔截不演
+      if (baselineCent <= 0) {
+        wx.showToast({ title: '當前無有效報價，暫不能建立降價基準', icon: 'none' });
+        return;
+      }
+      // 訂閱授權（與餘票監控同模板；tap 同步鏈內先彈，失敗不阻斷——拉模式仍可用）
+      if (SUBSCRIBE_TMPL_TICKET_MONITOR) {
+        await new Promise<void>((resolve) => {
+          wx.requestSubscribeMessage({
+            tmplIds: [SUBSCRIBE_TMPL_TICKET_MONITOR],
+            success: () => resolve(),
+            fail: () => resolve(),
+          });
+        });
+      }
+      // 降幅閾值選擇（用戶定義「降到多少才值得回來看」）
+      const DROP_OPTIONS = [
+        { label: `降 50 元（現最低 ¥${(baselineCent / 100).toFixed(0)}）`, dropCent: 5000 },
+        { label: '降 100 元', dropCent: 10000 },
+        { label: '降 200 元', dropCent: 20000 },
+      ];
+      const tapIdx = await new Promise<number>((resolve) => {
+        wx.showActionSheet({
+          itemList: DROP_OPTIONS.map((o) => o.label),
+          success: (r) => resolve(r.tapIndex),
+          fail: () => resolve(-1), // 取消 / 失焦：靜默退出
+        });
+      });
+      if (tapIdx < 0 || tapIdx >= DROP_OPTIONS.length) return;
+      const dropCent = DROP_OPTIONS[tapIdx].dropCent;
+
+      const res = await createMonitor(CLOUD_ENV, {
+        kind: 'flight_price',
+        params: {
+          from: ctx.from,
+          to: ctx.to,
+          date: ctx.date,
+          cabin: ctx.cabin ?? 'economy',
+          baselineCent,
+          dropCent,
+        },
+        label: `${ctx.from}→${ctx.to} ${ctx.date} 機票降價`,
+      });
+      if (res.code === 0 && res.data) {
+        upsertMonitor({
+          monitorId: res.data.monitorId,
+          label: res.data.label,
+          kind: res.data.kind,
+          params: res.data.params,
+          hit: res.data.hit,
+          lastMessage: res.data.lastMessage,
+          lastCheckedAt: res.data.lastCheckedAt,
+          createdAt: res.data.createdAt,
+        });
+        logInfo(`機票降價監控已創建：${ctx.from}→${ctx.to} ${ctx.date}（降 ¥${dropCent / 100} 觸發）`);
+        wx.showToast({ title: '已加入降價監控，可在行程頁查看', icon: 'none' });
+      } else {
+        wx.showToast({ title: res.message ?? '監控創建失敗', icon: 'none' });
+      }
+    } catch (err) {
+      logError('機票降價監控創建失敗', err);
+      wx.showToast({ title: '監控創建失敗，請稍後再試', icon: 'none' });
+    }
+  },
+
+  /**
+   * 監控命中直達下單（第二梯隊·項B）：訂閱消息點擊 / 行程頁「去預訂」攜
+   * monhit 落地，以監控參數組裝預訂 / 查詢意圖重新進入規劃鏈路（餘票與
+   * 車次卡「預訂」同構——查價後確認彈窗把關；機票降價為查詢口徑——選班
+   * 決策留給用戶。問題定義權留在用戶，僅省去重述意圖的重複勞動）。
+   *
+   * 參數以 monitorId 回查（外部 URL 不攜業務參數，防拼參偽造意圖）：
+   * 本地副本未命中（新設備 / 未同步）時拉雲端列表重試一次；僅 hit
+   * 條目可觸發（未命中≠可下單）。重複 dispatch 防護分三層：進入事件序號
+   * （onShow 僅響應新 App 級進入事件）、30 秒短窗口（抖動兜底）與頁面
+   * 實例隔離（行程頁每次 navigateTo 為新實例，顯式重試天然不受限）。
+   */
+  async handleMonitorHit(this: HomePageThis, monitorId: string): Promise<void> {
+    if (!monitorId || this.data.loading) return;
+    // 30 秒窗口去重（第三道防線，見函式頭註解的分層說明）：覆蓋冷啟動
+    // onLoad→onShow 緊鄰觸發與切前後台抖動，不阻擋用戶稍後再次點擊
+    // 同一通知重試
+    const last = this.monhitHandledAt.get(monitorId) ?? 0;
+    if (Date.now() - last < 30_000) return;
+    this.monhitHandledAt.set(monitorId, Date.now());
+
+    let entry = listMonitors().find((m) => m.monitorId === monitorId && m.hit);
+    if (!entry) {
+      try {
+        const res = await fetchMyMonitors(CLOUD_ENV);
+        const cloud: MonitorCloudItem | undefined =
+          res.code === 0 && Array.isArray(res.data)
+            ? res.data.find((m) => m.monitorId === monitorId && m.hit)
+            : undefined;
+        if (cloud) {
+          upsertMonitor({
+            monitorId: cloud.monitorId,
+            label: cloud.label,
+            kind: cloud.kind,
+            params: cloud.params,
+            hit: cloud.hit,
+            lastMessage: cloud.lastMessage,
+            lastCheckedAt: cloud.lastCheckedAt,
+            createdAt: cloud.createdAt,
+          });
+          entry = cloud;
+        }
+      } catch (err) {
+        logError('監控命中落地雲端回查失敗', err);
+      }
+    }
+    if (!entry) {
+      wx.showToast({ title: '監控記錄不可用，可在行程頁查看', icon: 'none' });
+      return;
+    }
+
+    // 依監控類型組裝意圖（與 onTapBookTrain / onTapBookFlight 同構口徑；
+    // 機票降價為查詢口徑——降價後選班與否的決策留給用戶）
+    let intent = '';
+    if (entry.kind === 'train_tickets') {
+      const p = entry.params as { from: string; to: string; date: string; trainNo?: string };
+      intent = `預訂 ${p.date} ${p.from}到${p.to}的${p.trainNo ?? ''}次高鐵二等座`;
+    } else if (entry.kind === 'flight_price') {
+      const p = entry.params as { from: string; to: string; date: string };
+      intent = `查詢 ${p.date} ${p.from}飛${p.to}的航班`;
+    }
+    if (!intent) {
+      wx.showToast({ title: '該監控類型暫不支援直達處理，詳見行程頁', icon: 'none' });
+      return;
+    }
+    logInfo(`監控命中直達：${entry.label}`);
+    await this.dispatch(intent);
   },
 
   /**

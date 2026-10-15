@@ -214,6 +214,8 @@ declare const wx: {
 
   // 分享 / 觸發
   showShareMenu(opts?: { withShareTicket?: boolean }): void;
+  /** 本次進入（啟動 / 切前台）參數（冷熱啟動統一的 query 消費入口，基礎庫 2.9.3+） */
+  getEnterOptionsSync(): { path: string; scene: number; query: Record<string, string> };
   /** 訂閱消息授權（必須由用戶 tap 動作觸發；模板 ID 未配置時呼叫方不渲染入口） */
   requestSubscribeMessage(opts: {
     tmplIds: string[];

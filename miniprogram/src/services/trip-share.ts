@@ -57,6 +57,28 @@ export async function shareTripToCloud(env: string, entry: TripEntry): Promise<s
 }
 
 /**
+ * 撤銷自己發起的分享（行程卡入口；雲端刪除後同伴側連結立即失效）
+ *
+ * @throws 業務失敗（code≠0）拋錯，由頁面以 toast 提示（404 已失效由
+ *         調用方識別後收斂本地狀態）
+ */
+export async function revokeSharedTrip(env: string, shareId: string): Promise<void> {
+  const res: CloudResponse<{ ok: boolean }> = await postContainer<{ ok: boolean }>(
+    env,
+    '/api/trip/share/revoke',
+    { shareId },
+    { retry: false, timeoutMs: 10_000 },
+  );
+  if (res.code !== 0) {
+    // 數字業務碼隨錯誤抛出（CodeReview Low #2）：頁面按 code===404 收斂本地
+    // 狀態，不依賴服務端文案字串匹配（文案調整不應靜默破壞收斂分支）
+    const err = new Error(res.message ?? '分享撤銷失敗，請稍後再試') as Error & { code?: number };
+    err.code = res.code;
+    throw err;
+  }
+}
+
+/**
  * 拉取他人分享的只讀行程（分享卡打開路徑）
  *
  * @returns 失敗 / 不存在返回 null，由頁面展示引導文案

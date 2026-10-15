@@ -142,6 +142,8 @@
                 <view class="route-sub">
                   <text class="route-date">{{card.routeDate}}</text>
                   <text class="route-more">{{card.moreLabel}}</text>
+                  <!-- 降價監控入口（第二梯隊·項C）：卡片級，降幅用戶指定，命中即時最低價推送直達查詢 -->
+                  <view class="route-monitor-btn" hover-class="btn-hover" bindtap="onMonitorFlight" data-ctx="{{card.monitorCtx}}">監控降價</view>
                 </view>
                 <view class="train-list">
                   <view wx:for="{{card.flights}}" wx:for-item="f" wx:key="flightNo" class="train-row">

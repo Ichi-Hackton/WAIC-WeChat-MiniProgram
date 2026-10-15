@@ -12,10 +12,19 @@ import { setItem, getItem } from '../services/storage';
 /** 本地監控條目（雲端 MonitorItem 的展示子集，雙端契約對齊維護） */
 export interface MonitorEntry {
   monitorId: string;
-  /** 展示摘要（「北京→上海 2026-10-20 G5」） */
+  /** 展示摘要（「北京→上海 2026-10-20 G5」/「上海 2026-10-20 天氣」） */
   label: string;
-  kind: 'train_tickets';
-  params: { from: string; to: string; date: string; trainNo?: string };
+  kind: 'train_tickets' | 'weather_alert' | 'flight_price';
+  params: {
+    from: string;
+    to: string;
+    date: string;
+    trainNo?: string;
+    city?: string;
+    cabin?: string;
+    baselineCent?: number;
+    dropCent?: number;
+  };
   /** 命中標記（雲端 tick 掃描回寫；命中即目標達成） */
   hit: boolean;
   /** 最近掃描結論 / 命中詳情 */

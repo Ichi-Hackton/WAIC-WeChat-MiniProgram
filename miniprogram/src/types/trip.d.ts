@@ -74,5 +74,8 @@ export interface TripEntry {
   remindedAt?: number;
   /** 訂閱出發提醒授權時間（epoch ms；訂閱消息模板 ID 配置後有效） */
   subscribedAt?: number;
+  /** 已換發的分享 ID（shr_ 前綴；分享成功時落盤——撤銷入口與重啟後的
+ *  「分享中」狀態保持消費，撤銷 / 30 天 TTL 失效後清除） */
+  sharedId?: string;
   createdAt: number;
 }

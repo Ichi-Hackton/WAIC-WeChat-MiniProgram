@@ -180,6 +180,24 @@ export function markSubscribed(id: string): void {
   setItem(BOOK_KEY, book);
 }
 
+/** 記錄已換發的分享 ID（分享成功時；行程頁撤銷入口與「分享中」狀態消費） */
+export function markShared(id: string, shareId: string): void {
+  const book = listTrips();
+  const entry = book.find((t) => t.id === id);
+  if (!entry) return;
+  entry.sharedId = shareId;
+  setItem(BOOK_KEY, book);
+}
+
+/** 清除分享狀態（撤銷成功 / 雲端已失效後；下次分享重新換發新 shareId） */
+export function clearShared(id: string): void {
+  const book = listTrips();
+  const entry = book.find((t) => t.id === id);
+  if (!entry) return;
+  delete entry.sharedId;
+  setItem(BOOK_KEY, book);
+}
+
 /**
  * 標記時間線節點已成交（渠道側支付完成後的用戶自證；本地 UI 態，
  * 雲端訂單狀態由 complete 端點先行歸檔，兩處同步由頁面層保證）

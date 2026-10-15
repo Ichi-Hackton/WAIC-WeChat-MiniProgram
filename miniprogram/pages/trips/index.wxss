@@ -433,6 +433,19 @@ page {
   border-radius: 6rpx;
 }
 
+/* 命中直達「去預訂」（第二梯隊·項B：綠系實色，與已命中徽章同源色） */
+.monitor-book {
+  flex-shrink: 0;
+  margin-left: 16rpx;
+  padding: 8rpx 18rpx;
+  font-family: 'Source Han Serif SC', 'Songti SC', 'STSong', 'PingFang SC', serif;
+  font-size: 20rpx;
+  letter-spacing: 2rpx;
+  color: #FCFAF5;
+  background: #6B7A5A;
+  border-radius: 6rpx;
+}
+
 .monitor-hint {
   margin-top: 4rpx;
   font-size: 20rpx;
@@ -453,4 +466,62 @@ page {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+/* ═══ 行程完整性差距（第三梯隊·L4 試探：可計算目標的缺項清單）═══ */
+
+.trip-checklist {
+  margin: 16rpx 24rpx 0;
+  padding: 16rpx 20rpx;
+  background: rgba(139, 115, 85, 0.06);
+  border: 1rpx solid #E8E0D0;
+  border-radius: 12rpx;
+}
+
+/* 遠期行程：收斂為一行提示（Daisy 教訓：不對遠期逐項轟炸） */
+.trip-checklist-far {
+  padding: 12rpx 20rpx;
+  background: transparent;
+}
+
+.checklist-hint {
+  font-size: 22rpx;
+  color: #6B5D4A;
+  letter-spacing: 1rpx;
+}
+
+.trip-checklist-far .checklist-hint {
+  color: #9A8B72;
+  font-weight: 300;
+}
+
+.check-row {
+  display: flex;
+  align-items: baseline;
+  margin-top: 10rpx;
+  font-size: 24rpx;
+}
+
+.check-mark {
+  flex-shrink: 0;
+  width: 36rpx;
+  color: #A04A3C;
+  font-weight: 600;
+}
+
+.check-row-ok .check-mark {
+  color: #6B7A5A;
+}
+
+.check-label {
+  color: #2B2018;
+}
+
+.check-hint {
+  flex: 1;
+  margin-left: 12rpx;
+  text-align: right;
+  font-size: 20rpx;
+  color: #9A8B72;
+  font-weight: 300;
 }

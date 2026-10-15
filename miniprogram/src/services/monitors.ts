@@ -8,18 +8,39 @@
 
 import { postContainer, getContainer, type CloudResponse } from './cloud';
 
-/** 創建監控入參（與雲端 handleCreate 契約對齊，兩份副本維護） */
+/** 創建監控入參（與雲端 handleCreate 契約對齊，兩份副本維護；
+ * weather_alert 由出發提醒登記自動展開，不開放用戶直建） */
 export interface MonitorCreateInput {
-  kind: 'train_tickets';
-  params: { from: string; to: string; date: string; trainNo?: string };
+  kind: 'train_tickets' | 'flight_price';
+  params: {
+    from: string;
+    to: string;
+    date: string;
+    trainNo?: string;
+    /** flight_price：艙位（協議值 economy / business / first） */
+    cabin?: string;
+    /** flight_price：基準價（分，創建時查詢最低價快照） */
+    baselineCent?: number;
+    /** flight_price：降幅閾值（分，用戶創建時指定） */
+    dropCent?: number;
+  };
   label: string;
 }
 
 /** 監控條目（雲端 MonitorItem 同構契約，兩份副本維護） */
 export interface MonitorCloudItem {
   monitorId: string;
-  kind: 'train_tickets';
-  params: { from: string; to: string; date: string; trainNo?: string };
+  kind: 'train_tickets' | 'weather_alert' | 'flight_price';
+  params: {
+    from: string;
+    to: string;
+    date: string;
+    trainNo?: string;
+    city?: string;
+    cabin?: string;
+    baselineCent?: number;
+    dropCent?: number;
+  };
   label: string;
   createdAt: number;
   lastCheckedAt: number;

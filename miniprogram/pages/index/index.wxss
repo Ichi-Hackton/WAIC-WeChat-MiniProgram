@@ -531,6 +531,20 @@ page {
   content: '';
 }
 
+/* 航班卡 route-sub 行內的降價監控入口（與 book-btn-monitor 同色系，尺度收窄適配 22rpx 輔助行） */
+.route-monitor-btn {
+  color: #A04A3C;
+  border: 1rpx solid #C99A90;
+  border-radius: 6rpx;
+  padding: 2rpx 12rpx;
+  font-size: 20rpx;
+  line-height: 1.6;
+}
+
+.route-monitor-btn::after {
+  content: '';
+}
+
 /* ============================================================
    訂單交付卡（hairline 憑證區）
    ============================================================ */

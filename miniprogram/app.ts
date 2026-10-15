@@ -23,6 +23,9 @@ import { markDailyActive } from './src/services/metrics';
 /** Agent Runtime 模組級持有（懶載入：首次存取 globalData.agent 時建構） */
 let agentRuntime: AgentRuntime | null = null;
 
+/** App 級進入事件序號（App.onShow 遞增；頁面據此分辨 enter options 快照新舊） */
+let enterEventSeq = 0;
+
 App({
   onLaunch(): void {
     // 僅輸出單條啟動日誌，保持 onLaunch 輕量：基礎庫對耗時超過 100ms 的
@@ -41,6 +44,11 @@ App({
     logInfo(`${BRAND_NAME} 進入前台`);
     // 日活打點（2026-10 評審 #5 複訪率分子；同日去重，fire-and-forget）
     markDailyActive(CLOUD_ENV);
+    // 進入事件序號遞增（2026-10 審計 P2）：getEnterOptionsSync 的返回值
+    // 在兩次 App 級進入事件之間保持不變——頁面往返（navigateTo 返回）觸發
+    // 的 onShow 讀到的是殘留快照。頁面側以序號對比，僅消費「新進入事件」
+    // 攜帶的 monhit，消除舊通知參數導致的重複 dispatch
+    enterEventSeq++;
   },
   onHide(): void {
     logInfo(`${BRAND_NAME} 進入後台`);
@@ -53,6 +61,10 @@ App({
     get agent(): AgentRuntime | null {
       if (!agentRuntime) agentRuntime = createAgentRuntime();
       return agentRuntime;
+    },
+    /** 當前 App 級進入事件序號（冷啟動首事件為 1；0 = 尚未發生） */
+    get enterEventSeq(): number {
+      return enterEventSeq;
     },
   },
 });
