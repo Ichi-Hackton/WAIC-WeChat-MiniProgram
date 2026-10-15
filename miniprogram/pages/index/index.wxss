@@ -1102,6 +1102,10 @@ page {
 
 .panel-progress-fill {
   height: 100%;
+  /* 動態進度經 CSS 變數注入（WXML 側 style="--fill: N%"）：內聯 width 直寫
+     {{模板}} 會被編輯器 CSS 語言服務誤判為語法錯誤，而自訂屬性值接受任意
+     token，可避開誤報；變數驅動的 width 變化同樣命中 transition 過渡 */
+  width: var(--fill, 0%);
   border-radius: 3rpx;
   transition: width 0.4s ease;
 }

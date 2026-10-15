@@ -324,7 +324,8 @@ interface HomePageData {
 /** Page 內部 this 實例 */
 interface HomePageThis {
   data: HomePageData;
-  setData: (patch: Partial<HomePageData>) => void;
+  /** 官方 setData 支持數據路徑 key（如 messages[3].cards），交叉類型與官方 typings 語義對齊 */
+  setData: (patch: Partial<HomePageData> & Record<string, unknown>) => void;
   /** 訊息序號（生成遞增 ID 用） */
   msgSeq: number;
   /** 當前活躍 Plan ID（task_NNN 僅在單一 Plan 內唯一，跨輪次需以 planId 隔離卡片更新） */
@@ -352,6 +353,9 @@ interface HomePageThis {
   onApproveCheckpoint: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
   /** 確認卡「取消」按鈕 */
   onRejectCheckpoint: (e: { currentTarget?: { dataset?: { msgId?: string } } }) => void;
+  /** 內部：以數據路徑 messages[i].cards 局部替換某消息的卡片陣列
+   *  （僅傳輸該消息卡片，避免隨聊天歷史增長的全量 messages setData） */
+  updateCardsByPath: (msgId: string, mutate: (cards: AnyCard[]) => AnyCard[]) => void;
   /** 內部：就地更新確認卡狀態（僅 pending 態卡片會被更新） */
   updateConfirmCardStatus: (msgId: string, status: 'approved' | 'rejected') => void;
   appendResultCard: (task: Task) => void;
@@ -2085,17 +2089,24 @@ Page({
     this.updateMemoryCard(msgId, 'dismissed');
   },
 
+  /** 內部：以數據路徑 messages[i].cards 局部替換某消息的卡片陣列——
+   *  四類確認卡與計劃卡更新共用（官方最佳實踐：路徑 setData 只傳輸
+   *  變更子樹，避免全量 messages 隨聊天歷史增長線性放大單次數據量；
+   *  setData 同步維護 this.data，後續讀取不受影響） */
+  updateCardsByPath(this: HomePageThis, msgId: string, mutate: (cards: AnyCard[]) => AnyCard[]): void {
+    const msgIdx = this.data.messages.findIndex((m) => m.id === msgId);
+    if (msgIdx < 0) return;
+    const cards = this.data.messages[msgIdx].cards;
+    if (!cards) return;
+    this.setData({ [`messages[${msgIdx}].cards`]: mutate(cards) });
+  },
+
   /** 內部：就地更新記憶確認卡狀態（以消息 ID 定位；僅 pending 態卡片
    *  會被更新，防止重複點擊 / 已處理卡被誤改） */
   updateMemoryCard(this: HomePageThis, msgId: string, status: 'confirmed' | 'dismissed'): void {
-    const messages = this.data.messages.map((msg) => {
-      if (msg.id !== msgId) return msg;
-      const cards = (msg.cards ?? []).map((c) =>
-        c.type === 'memory' && c.status === 'pending' ? { ...c, status } : c,
-      );
-      return { ...msg, cards };
-    });
-    this.setData({ messages });
+    this.updateCardsByPath(msgId, (cards) =>
+      cards.map((c) => (c.type === 'memory' && c.status === 'pending' ? { ...c, status } : c)),
+    );
   },
 
   /** 例程提議卡「存例程」：話語 + 流程序列固化落盤 + 卡片轉已存態 +
@@ -2128,16 +2139,11 @@ Page({
   },
 
   /** 內部：就地更新例程提議卡狀態（以消息 ID 定位；僅 pending 態卡片會被
-   *  更新，與 updateMemoryCard 同構） */
+   *  更新，與 updateMemoryCard 同構，經數據路徑局部傳輸） */
   updateRoutineCard(this: HomePageThis, msgId: string, status: 'confirmed' | 'dismissed'): void {
-    const messages = this.data.messages.map((msg) => {
-      if (msg.id !== msgId) return msg;
-      const cards = (msg.cards ?? []).map((c) =>
-        c.type === 'routine-save' && c.status === 'pending' ? { ...c, status } : c,
-      );
-      return { ...msg, cards };
-    });
-    this.setData({ messages });
+    this.updateCardsByPath(msgId, (cards) =>
+      cards.map((c) => (c.type === 'routine-save' && c.status === 'pending' ? { ...c, status } : c)),
+    );
   },
 
   /** 例程 chip 點擊：刷新新鮮度後以口令進入 dispatch——規劃仍走 LLM 全鏈路
@@ -2197,16 +2203,11 @@ Page({
   },
 
   /** 內部：就地更新個人資料保存卡狀態（以消息 ID 定位；僅 pending 態卡片
-   *  會被更新，與 updateMemoryCard 同構） */
+   *  會被更新，與 updateMemoryCard 同構，經數據路徑局部傳輸） */
   updateProfileCard(this: HomePageThis, msgId: string, status: 'confirmed' | 'dismissed'): void {
-    const messages = this.data.messages.map((msg) => {
-      if (msg.id !== msgId) return msg;
-      const cards = (msg.cards ?? []).map((c) =>
-        c.type === 'profile' && c.status === 'pending' ? { ...c, status } : c,
-      );
-      return { ...msg, cards };
-    });
-    this.setData({ messages });
+    this.updateCardsByPath(msgId, (cards) =>
+      cards.map((c) => (c.type === 'profile' && c.status === 'pending' ? { ...c, status } : c)),
+    );
   },
 
   /** runtime 事件：寫操作確認請求（項C確認卡）——追加確認卡到聊天流，
@@ -2255,16 +2256,12 @@ Page({
     this.updateConfirmCardStatus(msgId, 'rejected');
   },
 
-  /** 內部：就地更新確認卡狀態（以消息 ID 定位；僅 pending 態卡片會被更新） */
+  /** 內部：就地更新確認卡狀態（以消息 ID 定位；僅 pending 態卡片會被更新，
+   *  經數據路徑局部傳輸） */
   updateConfirmCardStatus(this: HomePageThis, msgId: string, status: 'approved' | 'rejected'): void {
-    const messages = this.data.messages.map((msg) => {
-      if (msg.id !== msgId) return msg;
-      const cards = (msg.cards ?? []).map((c) =>
-        c.type === 'confirm' && c.status === 'pending' ? { ...c, status } : c,
-      );
-      return { ...msg, cards };
-    });
-    this.setData({ messages });
+    this.updateCardsByPath(msgId, (cards) =>
+      cards.map((c) => (c.type === 'confirm' && c.status === 'pending' ? { ...c, status } : c)),
+    );
   },
 
   /** runtime 事件：狀態機轉移 → 更新狀態列與 loading 氣泡文案 */
@@ -2318,38 +2315,41 @@ Page({
   /** runtime 事件：任務狀態更新 → 更新進度徽章 + 面板統計 + 成功時追加交付卡 */
   onAgentTaskUpdate(this: HomePageThis, task: Task): void {
     // 1. 就地更新計劃卡徽章 + 面板卡統計（僅當前活躍 Plan；面板統計由
-    //    更新後的同消息步驟卡狀態推算，兩者在同一次 map 內完成）
-    const messages = this.data.messages.map((msg) => {
-      if (!msg.cards?.length) return msg;
-      const hitIdx = msg.cards.findIndex((c) => {
-        if (c.type !== 'plan') return false;
-        const p = c.payload as { taskId?: string; planId?: string };
-        return p.taskId === task.id && p.planId === this.activePlanId;
+    //    更新後的同消息步驟卡狀態推算，兩者在同一次更新內完成；以數據
+    //    路徑 messages[i].cards 局部傳輸，避免全量 messages setData）
+    const isTargetStepCard = (c: AnyCard): boolean => {
+      if (c.type !== 'plan') return false;
+      const p = c.payload as { taskId?: string; planId?: string };
+      return p.taskId === task.id && p.planId === this.activePlanId;
+    };
+    const targetMsgId = this.data.messages.find((m) => m.cards?.some(isTargetStepCard))?.id;
+    if (targetMsgId) {
+      this.updateCardsByPath(targetMsgId, (cards) => {
+        const next = cards.slice();
+        const hitIdx = next.findIndex(isTargetStepCard);
+        if (hitIdx < 0) return next;
+        const hit = next[hitIdx] as PlanCard;
+        next[hitIdx] = {
+          ...hit,
+          payload: {
+            ...hit.payload,
+            status: task.status,
+            statusLabel: TASK_STATUS_LABELS[task.status] ?? task.status,
+            // 錯誤文案白名單映射：不透傳原始 message（可能含 wx API / 內部欄位等代碼級細節），
+            // 原始錯誤已由 scheduler / skill 層記入日誌供排查
+            ...(task.result?.error ? { error: friendlyTaskError(task.result.error.code) } : {}),
+          },
+        } as PlanCard;
+        // 面板卡統計刷新（同消息內同 PlanId 的面板卡；步驟卡已更新，推算即時）
+        const panelIdx = next.findIndex(
+          (c) => c.type === 'panel' && c.planId === this.activePlanId,
+        );
+        if (panelIdx >= 0) {
+          next[panelIdx] = refreshPanelCard(next[panelIdx] as PanelCard, next);
+        }
+        return next;
       });
-      if (hitIdx < 0) return msg;
-      const hit = msg.cards[hitIdx] as PlanCard;
-      const cards = msg.cards.slice();
-      cards[hitIdx] = {
-        ...hit,
-        payload: {
-          ...hit.payload,
-          status: task.status,
-          statusLabel: TASK_STATUS_LABELS[task.status] ?? task.status,
-          // 錯誤文案白名單映射：不透傳原始 message（可能含 wx API / 內部欄位等代碼級細節），
-          // 原始錯誤已由 scheduler / skill 層記入日誌供排查
-          ...(task.result?.error ? { error: friendlyTaskError(task.result.error.code) } : {}),
-        },
-      } as PlanCard;
-      // 面板卡統計刷新（同消息內同 PlanId 的面板卡；步驟卡已更新，推算即時）
-      const panelIdx = cards.findIndex(
-        (c) => c.type === 'panel' && c.planId === this.activePlanId,
-      );
-      if (panelIdx >= 0) {
-        cards[panelIdx] = refreshPanelCard(cards[panelIdx] as PanelCard, cards);
-      }
-      return { ...msg, cards };
-    });
-    this.setData({ messages });
+    }
 
     // 本輪成功任務登記（收尾「卡片即結論」判定用；同任務多次事件冪等）
     if (task.status === 'succeeded') {
@@ -2463,10 +2463,10 @@ Page({
     });
   },
 
-  /** 追加訊息到列表並自動捲動到底部 */
+  /** 追加訊息到列表並自動捲動到底部（路徑 setData 僅傳輸新訊息節點；
+   *  setData 同步維護 this.data.messages，連續追加不會錯位） */
   appendMessage(this: HomePageThis, msg: ChatMessage): void {
-    const messages = [...this.data.messages, msg];
-    this.setData({ messages, scrollIntoView: msg.id });
+    this.setData({ [`messages[${this.data.messages.length}]`]: msg, scrollIntoView: msg.id });
   },
 
   /** 內部：今日到期行程提醒（onShow 觸發；同日同行程僅提醒一次） */

@@ -35,7 +35,7 @@
       <!-- AI 訊息：頭像圖片 + 平鋪寬內容（不套氣泡，交付卡有完整展示空間） -->
       <view wx:else class="msg-ai" id="{{item.id}}">
         <view class="ai-avatar">
-          <image class="ai-avatar-img" src="{{avatarImg}}" mode="aspectFill"></image>
+          <image class="ai-avatar-img" src="{{avatarImg}}" mode="aspectFill" lazy-load="{{true}}"></image>
         </view>
         <view class="ai-body">
           <!-- 合規：所有 LLM 輸出需掛 AI 生成標識 -->
@@ -57,7 +57,7 @@
                   <text class="panel-phase {{card.failed > 0 ? 'panel-phase-warn' : (card.percent >= 100 ? 'panel-phase-ok' : '')}}">{{card.phaseLabel}}</text>
                 </view>
                 <view class="panel-progress">
-                  <view class="panel-progress-fill {{card.failed > 0 ? 'panel-fill-warn' : 'panel-fill-ok'}}" style="width: {{card.percent}}%;"></view>
+                  <view class="panel-progress-fill {{card.failed > 0 ? 'panel-fill-warn' : 'panel-fill-ok'}}" style="--fill: {{card.percent}}%"></view>
                 </view>
                 <view class="panel-stats">
                   <text class="panel-stat">共 {{card.total}} 步</text>
@@ -343,7 +343,7 @@
     <!-- loading：AI 頭像圖片（思考中流光）+ 階段文案 + 打字點 -->
     <view wx:if="{{loading}}" class="msg-ai is-loading" id="loading-bubble">
       <view class="ai-avatar">
-        <image class="ai-avatar-img" src="{{avatarImg}}" mode="aspectFill"></image>
+        <image class="ai-avatar-img" src="{{avatarImg}}" mode="aspectFill" lazy-load="{{true}}"></image>
       </view>
       <view class="ai-body">
         <view class="ai-head">
