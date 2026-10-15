@@ -4,4 +4,5 @@
 
 export * from './registry';
 export * from './adapter';
+export * from './dynamic';
 export { SkillRegistry } from './registry';

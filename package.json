@@ -5,7 +5,8 @@
   "description": "MicroMate — 你的隨身個人 AI 助理（微信小程序內的跨 SKILL 任務編排 Agent）",
   "scripts": {
     "type-check": "tsc --noEmit",
-    "build": "tsc --noEmit"
+    "build": "tsc --noEmit",
+    "test:dynamic": "tsc --noEmit && tsc miniprogram/src/skills/dynamic.ts miniprogram/src/llm/parser.ts miniprogram/src/interaction/dynamic-card.ts --ignoreConfig --module commonjs --target es2020 --esModuleInterop --skipLibCheck --outDir dist-test && node --test test/dynamic-sync.test.mjs"
   },
   "keywords": [
     "micromate",

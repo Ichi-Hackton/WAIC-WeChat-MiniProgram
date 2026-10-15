@@ -1,0 +1,114 @@
+<view class="page">
+  <!-- ═══ 首次載入佔位 ═══ -->
+  <view wx:if="{{loading}}" class="placeholder">載入中…</view>
+
+  <!-- ═══ 功能未開放（雲端開關 ENABLE_DYNAMIC_SKILLS）整頁提示 ═══ -->
+  <view wx:elif="{{!enabled}}" class="closed">
+    <text class="closed-mark">·</text>
+    <text class="closed-title">技能中心暫未開放</text>
+    <text class="closed-note">動態技能功能由服務端開關控制，開放後可在此描述需求、由 AI 起草新技能並經管理員審批上線。</text>
+  </view>
+
+  <!-- ═══ 正文 ═══ -->
+  <scroll-view wx:else scroll-y class="body">
+    <!-- 存儲降級橫幅（fail-closed：數據不可用僅可瀏覽） -->
+    <view wx:if="{{storage === 'unavailable'}}" class="banner">技能數據庫暫不可用，列表可能為空，請稍後下拉重試。</view>
+
+    <!-- ─── 鍛造區：需求 + 可選教材 + 提交起草 ─── -->
+    <view class="section">
+      <view class="section-head">
+        <text class="section-title">鍛造新技能</text>
+        <text class="section-sub">描述需求 → AI 起草 → 管理員審批 → 上線</text>
+      </view>
+      <textarea
+        class="req-input"
+        value="{{requirement}}"
+        bindinput="onRequirementInput"
+        maxlength="1200"
+        auto-height
+        placeholder="例：幫我查某本書在各平台的價格並比較…（至少 4 字）"
+        placeholder-class="input-ph"
+      />
+      <view class="source-toggle" hover-class="btn-hover" bindtap="onToggleSource">{{sourceExpanded ? '收起補充教材' : '＋ 補充教材（可選）'}}</view>
+      <textarea
+        wx:if="{{sourceExpanded}}"
+        class="req-input source-input"
+        value="{{sourceText}}"
+        bindinput="onSourceInput"
+        maxlength="8000"
+        auto-height
+        placeholder="可選：貼上接口文檔、欄位說明或範例數據，AI 會參考起草（≤8000 字）"
+        placeholder-class="input-ph"
+      />
+      <view wx:if="{{connectorNames}}" class="connector-note">可調用受控數據源：{{connectorNames}}</view>
+      <view class="forge-btn {{forging ? 'forge-btn-off' : ''}}" hover-class="btn-hover" bindtap="onForgeTap">{{forging ? 'AI 起草中…' : '提交 AI 起草'}}</view>
+    </view>
+
+    <!-- ─── 我的提案（全部生命週期狀態；需求原文僅本人與管理員可見） ─── -->
+    <view wx:if="{{mine.length > 0}}" class="section">
+      <text class="section-title">我的提案</text>
+      <view wx:for="{{mine}}" wx:key="id" class="rec-card">
+        <view class="rec-head">
+          <text class="rec-name">{{item.name}}</text>
+          <text class="rec-badge badge-{{item.status}}">{{item.statusLabel}}</text>
+        </view>
+        <text class="rec-desc">{{item.description}}</text>
+        <view wx:if="{{item.requirement}}" class="rec-req">需求：{{item.requirement}}</view>
+        <view wx:if="{{item.reason}}" class="rec-reason">{{item.reason}}</view>
+        <text class="rec-meta-line">{{item.kindLabel}} · {{item.timeLabel}} · v{{item.version}}</text>
+      </view>
+    </view>
+
+    <!-- ─── 公開技能（他人 approved） ─── -->
+    <view wx:if="{{publicSkills.length > 0}}" class="section">
+      <text class="section-title">公開技能</text>
+      <view wx:for="{{publicSkills}}" wx:key="id" class="rec-card">
+        <view class="rec-head">
+          <text class="rec-name">{{item.name}}</text>
+          <text class="rec-kind">{{item.kindLabel}}</text>
+        </view>
+        <text class="rec-desc">{{item.description}}</text>
+        <text class="rec-meta-line">{{item.timeLabel}} 上架</text>
+      </view>
+    </view>
+
+    <!-- ─── 管理員審批台：全部記錄 + approve / reject / disable / enable ─── -->
+    <view wx:if="{{isAdmin && reviewList.length > 0}}" class="section">
+      <text class="section-title">審批台（{{reviewList.length}}）</text>
+      <view wx:for="{{reviewList}}" wx:key="id" class="rec-card">
+        <view class="rec-head">
+          <text class="rec-name">{{item.name}}</text>
+          <view class="rec-badges">
+            <text wx:if="{{item.mine}}" class="rec-mine-tag">本人提案</text>
+            <text class="rec-badge badge-{{item.status}}">{{item.statusLabel}}</text>
+          </view>
+        </view>
+        <text class="rec-desc">{{item.description}}</text>
+        <view wx:if="{{item.requirement}}" class="rec-req">需求：{{item.requirement}}</view>
+        <view wx:if="{{item.reason}}" class="rec-reason">{{item.reason}}</view>
+        <text class="rec-meta-line">{{item.kindLabel}} · {{item.timeLabel}} · v{{item.version}}</text>
+        <view wx:if="{{item.actions.length > 0}}" class="rec-actions">
+          <view
+            wx:for="{{item.actions}}"
+            wx:for-item="act"
+            wx:key="decision"
+            class="act-btn {{act.primary ? 'act-primary' : ''}}"
+            hover-class="btn-hover"
+            bindtap="onReviewTap"
+            data-id="{{item.id}}"
+            data-decision="{{act.decision}}"
+            data-version="{{item.version}}"
+          >{{act.label}}</view>
+        </view>
+      </view>
+    </view>
+
+    <!-- ─── 空態 ─── -->
+    <view wx:if="{{mine.length === 0 && publicSkills.length === 0}}" class="empty">
+      <text class="empty-mark">·</text>
+      <text>還沒有動態技能——在上方描述需求，提交第一個提案。</text>
+    </view>
+
+    <view class="footnote">技能由 AI 起草、管理員審核後發佈；數據源為服務端受控連接器，不執行外部代碼。</view>
+  </scroll-view>
+</view>

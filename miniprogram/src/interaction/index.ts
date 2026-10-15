@@ -5,3 +5,4 @@
 export * from './checkpoint';
 export * from './voice';
 export * from './card-render';
+export * from './dynamic-card';
