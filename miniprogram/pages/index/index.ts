@@ -1536,7 +1536,10 @@ Page({
     // 淡出時長與 wxss opacity 過渡對齊；歡迎訊息延至淡出時入場，
     // 與範例 chips 錯落動畫銜接（chips 的 wx:if 綁定 !splash）。
     const firstLaunch = !getItem<boolean>('splash:seen', false);
-    const welcome = `你好，我是${BRAND_NAME}，說一句「明天北京到上海的高鐵」，我來辦。\n剩下的，交給下面的示例。`;
+    // 歡迎語（2026-10 六域回補後修訂）：定位行引用 BRAND_TAGLINE 品牌標語；
+    // 能力行與 DEFAULT_EXAMPLES 六個出廠示例一一對應（出行/咖啡/票務/預約/
+    // 行程/陪伴），chips 給具體指令、歡迎語給能力全景，二者互為印證。
+    const welcome = `你好，我是${BRAND_NAME}，${BRAND_TAGLINE}。\n出行、咖啡、票務、預約、行程、陪伴——一句話說需求，剩下的交給我。\n不知道從哪開始？試試下面的示例。`;
     const appendScanHint = () => {
       if (!scanIntent) return;
       self.setData({ inputText: scanIntent });
