@@ -26,6 +26,10 @@ import { geoRoutes } from './geo';
 import { trainRoutes } from './skill-train';
 import { flightRoutes } from './skill-flight';
 import { coffeeRoutes } from './skill-coffee';
+import { mcdRoutes } from './skill-mcd';
+import { luckinRoutes } from './skill-luckin';
+import { didiRoutes } from './skill-didi';
+import { fliggyRoutes } from './skill-fliggy';
 import { shoppingRoutes } from './skill-shopping';
 import { bookingRoutes } from './skill-booking';
 import { weatherRoutes } from './skill-weather';
@@ -33,8 +37,11 @@ import { mapRoutes } from './skill-map';
 import { ticketRoutes } from './skill-ticket';
 import { counselingRoutes } from './skill-counseling';
 import { paymentRoutes } from './skill-payment';
+import { mailRoutes } from './skill-mail';
 import { tripShareRoutes } from './trip-share';
 import { metricsRoutes } from './metrics';
+import { monitorRoutes } from './monitors';
+import { dynamicSkillRoutes } from './skill-dynamic-routes.js';
 
 /** 請求 body 大小上限（位元組） */
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -51,6 +58,10 @@ const routes = new Map<string, RouteHandler>([
   ...trainRoutes,
   ...flightRoutes,
   ...coffeeRoutes,
+  ...mcdRoutes,
+  ...luckinRoutes,
+  ...didiRoutes,
+  ...fliggyRoutes,
   ...shoppingRoutes,
   ...bookingRoutes,
   ...weatherRoutes,
@@ -58,8 +69,11 @@ const routes = new Map<string, RouteHandler>([
   ...ticketRoutes,
   ...counselingRoutes,
   ...paymentRoutes,
+  ...mailRoutes,
   ...tripShareRoutes,
   ...metricsRoutes,
+  ...monitorRoutes,
+  ...dynamicSkillRoutes,
 ]);
 
 /** 雲端日誌（stdout，由雲托管日誌系統收集） */
