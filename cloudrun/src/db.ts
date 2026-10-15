@@ -27,10 +27,12 @@ import { createPool, type Pool, type RowDataPacket, type ResultSetHeader } from 
  * mcd=麥當勞點餐（2026-10-14 新增：首個真實下單域，訂單在麥當勞側真實創建）
  * luckin=瑞幸咖啡 ride=滴滴叫車（2026-10-14 並行接入新增，對應 skill-luckin / skill-didi）
  * monitor=條件監控（2026-10 第二梯隊·項A：餘票準常駐監控，命中即完成）
+ * trip_remind=出發提醒（2026-10 第二梯隊·項B：前一天推送的時間規則線，
+ * 訂閱授權後白化登記，推送 / 過期即收斂）
  */
 export type OrderDomain =
   | 'train' | 'flight' | 'shop' | 'shop_cart' | 'booking' | 'trip' | 'metrics'
-  | 'coffee' | 'ticket' | 'mcd' | 'luckin' | 'ride' | 'monitor';
+  | 'coffee' | 'ticket' | 'mcd' | 'luckin' | 'ride' | 'monitor' | 'trip_remind';
 
 /**
  * 訂單狀態：

@@ -297,3 +297,139 @@ const handleGetWeather: RouteHandler = async (body) => {
 export const weatherRoutes: Array<[string, RouteHandler]> = [
   ['POST /api/skill/skill.weather.query/get_weather', handleGetWeather],
 ];
+
+/* ============ 預報查詢（2026-10 第二梯隊·項B：條件監控 / 出發提醒消費） ============ */
+
+/** 城市名 → adcode 快取條目 */
+interface CityAdcodeEntry {
+  adcode: string;
+  city: string;
+  expireAt: number;
+}
+
+/** 城市名快取（行程城市多爲市級名，命中率高；鍵為小寫化城市名） */
+const cityAdcodeCache = new Map<string, CityAdcodeEntry>();
+
+/** 高德地理編碼回應（僅聲明消費欄位） */
+interface AmapGeoResp {
+  status?: string;
+  info?: string;
+  geocodes?: unknown;
+}
+
+/** 高德預報回應（extensions=all；forecasts[0].casts 爲未來 3~4 天陣列） */
+interface AmapForecastResp {
+  status?: string;
+  info?: string;
+  forecasts?: unknown;
+}
+
+/** 單日預報（展示 / 命中判定消費的欄位子集） */
+export interface ForecastCast {
+  /** 預報日（YYYY-MM-DD） */
+  date: string;
+  dayweather: string;
+  nightweather: string;
+  /** 白天最高溫（攝氏度，字串形態） */
+  daytemp: string;
+  /** 夜間最低溫 */
+  nighttemp: string;
+}
+
+/** 窄化：預報 casts 陣列單條 → ForecastCast（date 缺失返回 null） */
+function toCast(raw: unknown): ForecastCast | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const p = raw as Record<string, unknown>;
+  const date = strOrUndef(p.date);
+  const dayweather = strOrUndef(p.dayweather);
+  const nightweather = strOrUndef(p.nightweather);
+  if (!date || !dayweather || !nightweather) return null;
+  return {
+    date,
+    dayweather,
+    nightweather,
+    daytemp: strOrUndef(p.daytemp) ?? '',
+    nighttemp: strOrUndef(p.nighttemp) ?? '',
+  };
+}
+
+/** 快取淘汰（上限與實況鏈一致） */
+function evictOldest(cache: Map<string, { expireAt: number }>): void {
+  if (cache.size <= CACHE_MAX_ENTRIES) return;
+  const oldest = cache.keys().next().value;
+  if (oldest !== undefined) cache.delete(oldest);
+}
+
+/**
+ * 城市名 → adcode（地理編碼 + 24h 快取）
+ *
+ * @returns null：未配置金鑰 / 上游失敗 / 城市無對應行政區
+ */
+export async function lookupCityAdcode(city: string): Promise<CityAdcodeEntry | null> {
+  const key = process.env.AMAP_KEY;
+  if (!key) return null;
+  const cacheKey = city.trim().toLowerCase();
+  const hit = cityAdcodeCache.get(cacheKey);
+  if (hit && Date.now() < hit.expireAt) return hit;
+
+  const body = await callAmap<AmapGeoResp>(`/v3/geocode/geo?address=${encodeURIComponent(city)}&key=${key}`, key);
+  if (!body || body.status !== '1' || !Array.isArray(body.geocodes) || body.geocodes.length === 0) {
+    console.error(`[weather] 城市地理編碼失敗：${city}（status=${body?.status} ${body?.info ?? ''}）`);
+    return null;
+  }
+  const first = body.geocodes[0] as Record<string, unknown>;
+  const adcode = strOrUndef(first.adcode);
+  if (!adcode) {
+    console.error(`[weather] 城市地理編碼結果缺少 adcode：${city}`);
+    return null;
+  }
+  const entry: CityAdcodeEntry = {
+    adcode,
+    city: strOrUndef(first.city) ?? city.slice(0, 24),
+    expireAt: Date.now() + LOCATION_CACHE_TTL_MS,
+  };
+  cityAdcodeCache.set(cacheKey, entry);
+  evictOldest(cityAdcodeCache);
+  return entry;
+}
+
+/** 預報快取（adcode → { casts, expireAt }；預報更新頻率低於實況，TTL 30 分鐘） */
+const forecastCache = new Map<string, { casts: ForecastCast[]; expireAt: number }>();
+
+const FORECAST_CACHE_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * 城市名 → 未來數日預報（監控掃描 / 出發提醒文案消費）
+ *
+ * 高德預報窗口僅 3~4 天：目標日在窗口外時返回空陣列（如實「窗口未覆蓋」，
+ * 由調用方記錄等待臨近，不虚報無異常）。
+ *
+ * @returns null：配置缺失 / 上游失敗（與「窗口外」的空陣列語義分流）
+ */
+export async function getForecastByCity(city: string, date: string): Promise<ForecastCast[] | null> {
+  const key = process.env.AMAP_KEY;
+  if (!key) return null;
+  const loc = await lookupCityAdcode(city);
+  if (!loc) return null;
+
+  const cached = forecastCache.get(loc.adcode);
+  if (cached && Date.now() < cached.expireAt) {
+    return cached.casts.filter((c) => c.date === date);
+  }
+
+  const body = await callAmap<AmapForecastResp>(
+    `/v3/weather/weatherInfo?city=${loc.adcode}&extensions=all&key=${key}`,
+    key,
+  );
+  if (!body || body.status !== '1' || !Array.isArray(body.forecasts) || body.forecasts.length === 0) {
+    console.error(`[weather] 預報查詢業務失敗：status=${body?.status} ${body?.info ?? ''}`);
+    return null;
+  }
+  const rawCasts = (body.forecasts[0] as Record<string, unknown>).casts;
+  const casts = (Array.isArray(rawCasts) ? rawCasts : [])
+    .map(toCast)
+    .filter((c): c is ForecastCast => c !== null);
+  forecastCache.set(loc.adcode, { casts, expireAt: Date.now() + FORECAST_CACHE_TTL_MS });
+  evictOldest(forecastCache);
+  return casts.filter((c) => c.date === date);
+}

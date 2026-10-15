@@ -39,6 +39,7 @@ import { counselingRoutes } from './skill-counseling';
 import { paymentRoutes } from './skill-payment';
 import { mailRoutes } from './skill-mail';
 import { tripShareRoutes } from './trip-share';
+import { tripRemindRoutes } from './trip-remind';
 import { metricsRoutes } from './metrics';
 import { monitorRoutes } from './monitors';
 import { dynamicSkillRoutes } from './skill-dynamic-routes.js';
@@ -71,6 +72,7 @@ const routes = new Map<string, RouteHandler>([
   ...paymentRoutes,
   ...mailRoutes,
   ...tripShareRoutes,
+...tripRemindRoutes,
   ...metricsRoutes,
   ...monitorRoutes,
   ...dynamicSkillRoutes,
@@ -122,6 +124,37 @@ function headerStr(req: IncomingMessage, name: string): string | undefined {
   const v = req.headers[name];
   return typeof v === 'string' ? v : Array.isArray(v) ? v[0] : undefined;
 }
+
+/** 客戶端來源 IP：雲托管網關轉發帶 x-forwarded-for（首位為真實來源），
+ *  本地直連回退 socket 位址（llm / stt 匿名請求的配額鍵） */
+function clientIpOf(req: IncomingMessage): string {
+  const xff = headerStr(req, 'x-forwarded-for');
+  if (xff) return xff.split(',')[0].trim();
+  return req.socket.remoteAddress ?? 'unknown';
+}
+
+/*
+ * 網關身份信任模式（2026-10 審計 P1-3：條件性身份偽造）
+ *
+ * 威脅模型：x-wx-openid 等身份頭由雲托管網關在小程序 callContainer 路徑
+ * 注入，但若部署開放了公網訪問，直連者可自帶偽造頭（網關不剝離），
+ * 全部寫操作的歸屬鑒權（防 IDOR）隨之被旁路。
+ *
+ * 模式（環境變數 GATEWAY_IDENTITY_MODE）：
+ *   dev（預設）—— 維持現狀直接信任裸 header。僅適用於本地開發，或已在
+ *             雲托管控制台關閉公網訪問（僅微信管道可達）的部署。
+ *   strict —— 要求網關注入的 x-wx-source: weapp，缺失該頭的請求一律 403
+ *             （擋無差別掃描器與低成本濫用）。
+ *
+ * 誠實邊界：頭值是公開枚舉，決心偽造者仍可自帶全套頭繞過——代碼層不存在
+ * 對公網偽造的密碼學根治，**根治動作是在雲托管控制台關閉公網訪問**（運維
+ * 配置，無法由代碼替代）。開啟 strict 即代表部署者顯式理解並接受此邊界，
+ * 與 llm / stt 的全局配額桶（不依賴身份）共同構成縱深防禦。
+ *
+ * 例外路徑（非微信流量，自有鑒權）：/internal/*（CRON_TOKEN fail-closed）；
+ * /healthz、/、/api/dev-log 在前置分支已提前返回，不經此門。
+ */
+const GATEWAY_IDENTITY_STRICT = process.env.GATEWAY_IDENTITY_MODE === 'strict';
 
 const server = createServer((req, res) => {
   void handle(req, res);
@@ -186,9 +219,16 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return;
   }
 
+  // strict 模式：僅放行帶網關身份標記的微信管道流量（見上方模式說明塊）
+  if (GATEWAY_IDENTITY_STRICT && !url.startsWith('/internal/') && headerStr(req, 'x-wx-source') !== 'weapp') {
+    sendJson(res, 403, { code: 403, message: '僅接受微信小程序管道調用（缺少網關身份標記）' });
+    return;
+  }
+
   const ctx: RequestContext = {
     openid: headerStr(req, 'x-wx-openid'),
     sessionId: headerStr(req, 'x-micromate-session'),
+    clientIp: clientIpOf(req),
   };
 
   try {
