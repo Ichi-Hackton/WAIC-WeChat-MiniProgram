@@ -1,59 +1,61 @@
 /**
- * 人類確認對話框
+ * 人類確認（聊天流結構化確認卡，2026-10 第二梯隊·項C）
  *
- * 規範來源：.qoder/rules/Agent.md § 8.1, § 10（2026-10 修訂）
+ * 規範來源：.qoder/rules/Agent.md § 8.1, § 10；借鑑 Muse 審批卡形態
  *
- * 預設行為：兩個 hook（confirmPlan / awaitCheckpoint）均**直接 resolve true**，
- * 遵循「最小打扰」原則——使用者發出意圖即視同同意，UI 上的 plan 卡片與交付卡
- * 已提供充分能見性，脫彈窗冗餘只會在高頻任務流中造成噪音。
+ * 形態演進：
+ *   1. wx.showModal 彈窗（歷史）——並行 ready 的多個寫操作同時彈窗會互相
+ *      頂掉導致確認丟失（scheduler 的 Promise 鏈串行化只是權宜補丁）
+ *   2. 直接 resolve true（2026-10 最小打找修訂）——彈窗全局禁用
+ *   3. 聊天流確認卡（現行）——requiresHumanConfirm 的寫操作在對話流內出
+ *      結構化確認卡（標題 + 脱敏明細 + 雙按鈕），點按後回傳。卡片天然
+ *      可並存（每張卡獨立應答閉包），不依賴串行化也不會互頂；留在聊天
+ *      流中還提供了彈窗沒有的審計能見度（用户可回看當時確認了什麼）
  *
- * 安全网：
- *   1. rollback 機制：寫操作失敗可反序撤銷已成功的 Task
- *   2. 跳轉模式：2026-10 真實渠道上線後，寫操作（購票 / 購物 / 預約）交付
- *      「跳轉下單卡」——真實交易與支付在官方渠道側完成，交易確認由渠道承擔
- *   3. 「重置」按鈕：誤操作可一鍵清空對話重來
+ * 觀察者反轉（依賴方向）：interaction 層不反向依賴頁面——模組級 sink 由
+ * app.ts 組裝時注入（轉發給 AgentRuntimeEvents 訂閱者，即首頁），依賴
+ * 方向保持 app → interaction → core 單向（規範 § 12.3）。
  *
- * 保留函式簽名原因：
- *   - scheduler 仍會呼叫 checkpoint 入參（函式永遠返回 true，狀態機依然走完）
- *   - 未來若要重新啟用彈窗，只需在函式內插回 wx.showModal 即可，不需改動調用方
+ * fail-closed 語義：sink 未註冊（無 UI 可確認，如測試環境 / 頁面已卸載）
+ * 時直接拒絕——需確認的寫操作不得在無人看見時默默放行。
  *
- * 若無 wx API（如測試環境）：同樣直接 resolve true（預設通過，與生產一致）。
+ * Plan 確認（confirmPlan）維持直接通過：UI plan 卡已提供能見度，整輪
+ * 彈窗屬高頻任務流噪音（§ 8.1 最小打找修訂不變）；單步確認卡只攔截
+ * capability 聲明 requiresHumanConfirm 或用戶域級覆蓋為 confirm 的任務。
  */
 
-import type { CheckpointInput, ConfirmPlanInput } from '../types/checkpoint';
-import { BRAND_AI_GENERATED_BY } from '../types/brand';
+import type {
+  CheckpointInput,
+  ConfirmPlanInput,
+  CheckpointCardPayload,
+  CheckpointRespond,
+  CheckpointSink,
+} from '../types/checkpoint';
+import { taskLabel } from '../llm/client';
 import { formatCents } from '../utils/field-labels';
-import { info as logInfo } from '../utils/logger';
+import { info as logInfo, warn as logWarn } from '../utils/logger';
 
 // 型別已下沉至 types/checkpoint.d.ts（core 層依賴注入用），此處 re-export 保持兼容
-export type { CheckpointInput, ConfirmPlanInput };
+export type { CheckpointInput, ConfirmPlanInput, CheckpointCardPayload, CheckpointRespond };
 
-/** 透過 wx.showModal 顯示確認框，resolve 為布爾 */
-function showWxModal(opts: {
-  title: string;
-  content: string;
-  confirmText?: string;
-  cancelText?: string;
-}): Promise<boolean> {
-  return new Promise((resolve) => {
-    const wxApi = (globalThis as { wx?: {
-      showModal?: (o: unknown) => void;
-    } }).wx;
-    if (!wxApi?.showModal) {
-      logInfo(`[fallback] wx.showModal 不可用，預設拒絕：${opts.title}`);
-      resolve(false);
-      return;
-    }
-    wxApi.showModal({
-      title: opts.title,
-      content: opts.content,
-      confirmText: opts.confirmText ?? '確認',
-      cancelText: opts.cancelText ?? '取消',
-      success: (res: { confirm: boolean; cancel: boolean }) => resolve(res.confirm),
-      fail: () => resolve(false),
-    });
-  });
+/** 確認請求 sink（模組級；app.ts 組裝時注入，頁面卸載 / runtime 重建時可置空） */
+let checkpointSink: CheckpointSink | null = null;
+
+/** 注入 / 撤除確認卡轉發通道（app.ts 組裝層專用） */
+export function setCheckpointSink(sink: CheckpointSink | null): void {
+  checkpointSink = sink;
 }
+
+/** 確認卡等待上限：超時視為拒絕（防止页面異常時 Promise 永久掛起卡死調度鏈） */
+const CHECKPOINT_TIMEOUT_MS = 120_000;
+
+/** 動作級確認按鈕文案（未命中用「確認執行」兌底） */
+const CONFIRM_TEXTS: Record<string, string> = {
+  send_mail: '確認發送',
+  book_ticket: '確認生成購票卡',
+  book_flight: '確認生成機票卡',
+  dial_phone: '確認撥號',
+};
 
 /** Plan 確認：預設直接通過（彈窗已禁用；UI plan 卡片提供同等可見性） */
 export async function confirmPlan(input: ConfirmPlanInput): Promise<boolean> {
@@ -96,6 +98,8 @@ const INPUT_LABELS: Record<string, string> = {
   quantity: '數量',
   flightNo: '航班',
   cabin: '艙位',
+  subject: '主題',
+  body: '正文',
 };
 
 /** 入參 → 逐行「中文標籤：標量值」（未映射鍵、物件 / 陣列值一律略過） */
@@ -149,9 +153,45 @@ function formatInputDetail(input: Record<string, unknown>): string {
   return formatScalarLines(input);
 }
 
-/** 單步寫操作確認：預設直接通過（彈窗已禁用；跳轉模式下真實交易在渠道側確認） */
-export async function awaitCheckpoint(input: CheckpointInput): Promise<boolean> {
-  const summary = input.task.summary ?? `${input.task.skillId}.${input.task.action}`;
-  logInfo(`[checkpoint/auto] 寫操作預設通過（跳轉模式，真實交易於渠道側完成）：${summary}`);
-  return true;
+/**
+ * 單步寫操作確認：向聊天流發結構化確認卡，等用戶點按應答
+ *
+ * 超時 / sink 缺失均 fail-closed（拒絕）；重複應答冪等（settled 標記 +
+ * clearTimeout，晚到的第二次點按無副作用）。
+ */
+export function awaitCheckpoint(input: CheckpointInput): Promise<boolean> {
+  const { task, resolvedInput } = input;
+  const label = taskLabel(task);
+  const payload: CheckpointCardPayload = {
+    taskId: task.id,
+    skillName: label,
+    title: `請確認：${label}`,
+    detailLines: formatInputDetail(resolvedInput)
+      .split('\n')
+      .filter((line) => line.length > 0),
+    confirmText: CONFIRM_TEXTS[task.action] ?? '確認執行',
+  };
+  const sink = checkpointSink;
+  if (!sink) {
+    logWarn(`[checkpoint] 無 UI 確認通道（sink 未註冊），安全起見拒絕：${payload.title}`);
+    return Promise.resolve(false);
+  }
+  logInfo(`[checkpoint] 確認卡已發出：${payload.title}`);
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      logWarn(`[checkpoint] 確認卡超時未應答，視為拒絕：${payload.title}`);
+      resolve(false);
+    }, CHECKPOINT_TIMEOUT_MS);
+    const respond: CheckpointRespond = (approved: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      logInfo(`[checkpoint] 應答：${approved ? '同意' : '拒絕'}（${payload.title}）`);
+      resolve(approved);
+    };
+    sink(payload, respond);
+  });
 }

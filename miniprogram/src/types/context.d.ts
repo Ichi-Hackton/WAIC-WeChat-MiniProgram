@@ -32,6 +32,9 @@ export interface UserProfile {
   location?: UserLocation;
   /** 定位授權狀態；缺失表示本輪未嘗試定位（withLocation=false 或無 wx 環境） */
   locationAuth?: LocationAuth;
+  /** 家地址摘要（2026-10-14 新增；地址簿默認收貨地址，空簿缺失）——
+ *  「我家附近」類 POI 意圖的查詢中心供給（search_poi 的 address 參數） */
+  homeAddress?: { city: string; full: string };
   /** 用戶偏好（長期記憶：storage/preferences 白名單域，如飲食、座位類型；
    *   隱式對話沉澱 + 顯式手動設置雙軌寫入，本地落盤待雲端同步） */
   preferences: Record<string, unknown>;

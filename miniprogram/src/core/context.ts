@@ -18,6 +18,7 @@ import { now as _now } from '../utils/datetime';
 import { getCachedOpenid } from '../services/identity';
 import { reverseGeocode } from '../services/geo';
 import { getDefaultAddress, normalizeCityName } from '../storage/address';
+import type { AddressEntry } from '../storage/address';
 import { getHistory, sanitizeIntent } from '../storage/session';
 import { getPreferenceSummary } from '../storage/preferences';
 import { error as logError, info as logInfo } from '../utils/logger';
@@ -78,6 +79,10 @@ function fetchCoord(): Promise<CoordOk | CoordFail | undefined> {
           resolve({ ok: false, auth: 'error' });
           return;
         }
+        // 定位可觀測性（2026-10-14）：座標是「附近」類 POI / 天氣的查詢中心，
+        // 偏移直接導致結果不可信（badcase：模擬器傳感器位置 ≠ 真實位置，
+        // 「樓下有便利店但沒查到」）。成功路徑記錄座標供 dev-log 對照排查
+        logInfo(`定位成功：(${r.latitude.toFixed(5)}, ${r.longitude.toFixed(5)}) type=gcj02`);
         resolve({ ok: true, lat: r.latitude, lng: r.longitude, rawCity: r.city });
       })
       .catch((e: unknown) => {
@@ -105,9 +110,11 @@ function fetchCoord(): Promise<CoordOk | CoordFail | undefined> {
  */
 async function fetchLocation(
   cloudEnv: string,
+  addrBook: AddressEntry | null,
 ): Promise<{ location?: UserLocation; auth?: LocationAuth }> {
-  // 出發城市第一優先級：地址簿默認地址市級（含歸一化；空簿為 null）
-  const addrCity = getDefaultAddress()?.city;
+  // 出發城市第一優先級：地址簿默認地址市級（含歸一化；空簿為 null）。
+  // 地址條目由 buildContext 單次讀取傳入（homeAddress 雙消費，免重複讀 storage）
+  const addrCity = addrBook?.city;
   const addrCityNorm = addrCity ? normalizeCityName(addrCity) : undefined;
 
   const coord = await fetchCoord();
@@ -157,8 +164,11 @@ export async function buildContext(opts: BuildContextOptions): Promise<AgentCont
     logInfo('尚無 userId，使用匿名身份（MVP 階段）');
   }
 
+  // 地址簿默認地址（單次讀取雙消費：fetchLocation 取市級作出發城市；
+  // userProfile.homeAddress 供「我家附近」POI 意圖作查詢中心，雲端正向編碼）
+  const defaultAddr = getDefaultAddress();
   const { location, auth } =
-    opts.withLocation !== false ? await fetchLocation(opts.cloudEnv) : {};
+    opts.withLocation !== false ? await fetchLocation(opts.cloudEnv, defaultAddr) : {};
 
   // 跨會話意圖摘要回填（§ 10 紅線合規）：僅讀 storage/session 的脫敏意圖
   // 摘要（getHistory → wx.getStorageSync，同步 API，微秒級不阻塞事件循環），
@@ -182,6 +192,14 @@ export async function buildContext(opts: BuildContextOptions): Promise<AgentCont
     userProfile: {
       ...(location ? { location } : {}),
       ...(auth ? { locationAuth: auth } : {}),
+      ...(defaultAddr
+        ? {
+            homeAddress: {
+              city: normalizeCityName(defaultAddr.city),
+              full: `${defaultAddr.province}${defaultAddr.city}${defaultAddr.district}${defaultAddr.detail}`,
+            },
+          }
+        : {}),
       preferences: getPreferenceSummary(),
       history: intentHistory,
     },

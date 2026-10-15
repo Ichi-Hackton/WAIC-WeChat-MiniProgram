@@ -71,6 +71,8 @@ declare const wx: {
     content: string;
     confirmText?: string;
     cancelText?: string;
+    /** 確認按鈕文字色（破壞性操作以紅色系標示，微信官方參數） */
+    confirmColor?: string;
     showCancel?: boolean;
     success?: (res: { confirm: boolean; cancel: boolean }) => void;
     fail?: (err: unknown) => void;
@@ -237,8 +239,16 @@ declare const wx: {
   // 動畫 / 振動
   vibrateShort(opts?: { type?: 'light' | 'medium' | 'heavy' }): void;
 
-  // 剪貼簿
-  setClipboardData(opts: { data: string; success?: () => void }): void;
+  // 剪貼簿（fail 補齊：services/device.ts 依賴 fail 回調做 Promise 化錯誤傳遞）
+  setClipboardData(opts: { data: string; success?: () => void; fail?: (err: unknown) => void }): void;
+
+  // 撥打電話（拉起系統撥號面板，用戶仍需手動確認呼叫；封裝於 services/device.ts，
+  // 業務層勿直接呼叫）
+  makePhoneCall(opts: {
+    phoneNumber: string;
+    success?: () => void;
+    fail?: (err: unknown) => void;
+  }): void;
 
   // 文本選擇
   setEnableAlertBeforeUnload(opts: { message: string; success?: () => void }): void;

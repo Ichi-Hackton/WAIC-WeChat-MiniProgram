@@ -12,15 +12,19 @@
  *     - 全部 Task 都進入終態（succeeded / failed / skipped）
  *     - 或偵測死鎖
  *
- * 寫操作 requiresHumanConfirm：呼叫上層注入的 checkpoint 回調等用戶確認後才執行。
+ * 寫操作確認：needCheckpoint 檔位合成（用戶域級覆蓋 × capability 聲明）
+ * 後，呼叫上層注入的 checkpoint 回調（聊天流確認卡）等用戶應答後才執行。
  */
 
 import type { AgentContext } from '../types/context';
+import type { SkillCapability } from '../types/skill';
 import type { Plan } from '../types/plan';
 import type { Task, TaskStatus } from '../types/task';
 import type { CheckpointFn, CheckpointInput } from '../types/checkpoint';
 import { applyBindings, indexTasks } from '../utils/binding';
 import { info as logInfo, warn as logWarn, error as logError } from '../utils/logger';
+import { isWriteAction, reviewWriteTask } from '../utils/review';
+import { getPermissionTier } from '../storage/permissions';
 import * as adapter from '../skills/adapter';
 import { getCapability } from '../skills/adapter';
 
@@ -71,6 +75,34 @@ function serializeCheckpoint(
     () => undefined,
   );
   return run;
+}
+
+/**
+ * 寫操作確認檔位合成（第二梯隊·項B：用戶域級覆蓋 × 技能聲明）
+ *
+ * 類型謂詞：返回 true = 需要確認（且 cap 必非空，CheckpointInput 的
+ * capability 欄位為非空型別）；'confirm' 覆蓋但無 capability 元數據的
+ * 極端態（未註冊域）無從組確認卡，按能力未聲明確認的原語義放行。
+ *
+ * 聲明確認不可覆蓋（2026-10 審計修訂，Agent.md § 10 紅線）：能力聲明
+ * requiresHumanConfirm=true（真實下單 / 派單 / 支付 / 不可逆——真實
+ * 世界副作用）恆走確認卡，不接受 'auto' 檔壓制——與 permissions.ts
+ * 「支付 / 不可逆域不在放寬範圍內」的承諾對齊；'auto' 僅能放寬
+ * 未聲明確認的普通寫操作。
+ *
+ * 覆蓋 'confirm' → 恆確認（域內全部寫操作走確認卡，收緊）；
+ * 覆蓋 'auto'    → 自動執行（僅對未聲明確認的寫操作免打撓——用戶
+ *                  主權：對信任域「別再問我」，聲明確認的能力除外）；
+ * 'default' / 未覆蓋 → 跟隨 capability.requiresHumanConfirm 聲明。
+ *
+ * 寫操作一致性複核（utils/review）在 checkpoint 之前，同樣不受檔位
+ * 影響——攔截優先於一切確認。
+ */
+function needCheckpoint(skillId: string, cap: SkillCapability | undefined): cap is SkillCapability {
+  if (cap?.requiresHumanConfirm === true) return true;
+  const tier = getPermissionTier(skillId);
+  if (tier === 'confirm') return cap !== undefined;
+  return false;
 }
 
 /** 調度主入口 */
@@ -165,8 +197,26 @@ async function executeOne(
 
   const cap = getCapability(task.skillId, task.action);
 
-  // 寫操作 checkpoint（序列化，確保同一時刻僅一個確認彈窗）
-  if (cap?.requiresHumanConfirm) {
+  // 寫操作前置一致性複核（2026-10 第一梯隊·項1，幻覺下單最後一道閘）：
+  // 綁定解析後的最終入參與用戶意圖點名的確定參數（日期 / 車次 / 航班號 /
+  // 到達城市）規則比對，強證據不一致即攔截——置於 checkpoint 之前，
+  // 不一致的單不進入確認與執行環節（規範 § 10 紅線本地防線）
+  if (isWriteAction(task.action)) {
+    const review = reviewWriteTask(plan.intent, resolvedInput);
+    if (!review.ok) {
+      logWarn(
+        `寫操作複核攔截 ${task.id}（${task.skillId}.${task.action}）：${review.message ?? ''}`,
+      );
+      failTask(task, plan, 'REVIEW_BLOCKED', review.message ?? '安全複核未通過，已攔截', onUpdate);
+      cascadeSkip(task.id, plan, taskIndex, onUpdate);
+      return;
+    }
+  }
+
+  // 寫操作 checkpoint（項C：聊天流確認卡；項B：域級檔位合成判定）。
+  // serializeCheckpoint 串行化保留——卡片雖可並存，逐張應答的確定順序
+  // 對下游依賴執行更穩（前單被拒絕時後續 cascadeSkip，避免無意義連發）
+  if (needCheckpoint(task.skillId, cap)) {
     task.status = 'waiting_human';
     onUpdate?.(task);
     const ok = await serializeCheckpoint(checkpoint, {

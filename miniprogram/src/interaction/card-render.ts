@@ -92,13 +92,35 @@ const FIELD_LABELS: Record<string, string> = {
   windDirection: '風向',
   windPower: '風力',
   reportTime: '發布時間',
+  // 2026-10-14 麥當勞域（skill.food.mcdonalds）
+  storeName: '門市',
+  mcdOrderId: '麥當勞訂單號',
+  mcdStatus: '麥當勞狀態',
+  localStatus: '本地狀態',
+  takeWay: '取餐方式',
+  // 2026-10-14 瑞幸 / 滴滴域（skill.coffee.luckin / skill.ride.didi）
+  deptId: '門店',
+  productName: '商品',
+  statusText: '狀態',
+  etaMin: '預計',
+  fromName: '出發',
+  toName: '到達',
+  // 2026-10-14 飛豬域（skill.travel.fliggy）：酒店搜索與 AI 行程推薦
+  destName: '目的地',
+  poiName: '鄰近地標',
+  checkInDate: '入住',
+  checkOutDate: '退房',
+  interestsPoi: '周邊',
+  aiGenerated: 'AI 生成',
 };
 
-/** status 值 → 中文（未知值原樣展示；pending_external 爲 2026-10 跳轉模式寫操作狀態） */
+/** status 值 → 中文（未知值原樣展示）。pending_external 涵蓋兩種形態：
+ * 跳轉模式（星巴克 / 大麥等需求卡）與真實下單模式（麥當勞訂單已創建
+ * 待掃碼支付）——統一語義「本端已建單，真實支付在渠道側完成」 */
 const STATUS_VALUE_LABELS: Record<string, string> = {
   pending_payment: '待支付',
   paid: '已支付',
-  pending_external: '待跳轉下單',
+  pending_external: '待渠道支付',
   completed: '已完成',
   confirmed: '已確認',
   cancelled: '已取消',

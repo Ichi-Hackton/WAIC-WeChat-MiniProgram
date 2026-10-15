@@ -33,6 +33,15 @@ export interface Plan {
   traceId?: string;
   /** Planner 附注（tasks 為空時的追問文案，如「請補充出行日期」） */
   note?: string;
+  /** 能力缺口（動態技能計劃新增；僅 tasks 為空時合法）：規劃器判定意圖
+   *  超出現有 SKILL 能力範圍且無法靠補參數解決時攜帶，UI 據此引導
+   *  用戶到技能中心鍛造新技能（人工審批後免發版生效） */
+  missingCapability?: {
+    /** 建議的新技能名（≤ 12 字） */
+    skillName: string;
+    /** 給用戶的一句話建議（含鍛造引導） */
+    suggestion: string;
+  };
   /** 行程三要素（行程 DAG 專用；普通 Plan 缺省）。確認後由 Orchestrator 落庫為行程簿條目 */
   trip?: TripMeta;
 }
