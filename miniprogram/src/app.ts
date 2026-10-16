@@ -43,6 +43,7 @@ import { instance as shoppingMall } from './skills/builtin/shopping-mall/index';
 import { instance as bookingCenter } from './skills/builtin/booking-center/index';
 import { instance as ticketShow } from './skills/builtin/ticket-show/index';
 import { instance as counseling } from './skills/builtin/counseling/index';
+import { instance as healthAdvisor } from './skills/builtin/health-advisor/index';
 import { instance as paymentAicard } from './skills/builtin/payment-aicard/index';
 import { instance as deviceComm } from './skills/builtin/device-comm/index';
 import { Orchestrator } from './core/orchestrator';
@@ -180,6 +181,10 @@ function ensureSkillsRegistered(): void {
   SkillRegistry.register(bookingCenter);
   SkillRegistry.register(ticketShow);
   SkillRegistry.register(counseling);
+  // 健康顧問域（2026-10）：症狀分診 / 報告解讀 / 藥品通識三 capability，
+  // 純生成查詢（T1 告知 / T2 建議檔位）；醫療紅線：不診斷 / 不薦藥 /
+  // 不替代就醫，急症詞由規劃層短路與雲端入口守衛雙保險引導 120
+  SkillRegistry.register(healthAdvisor);
   SkillRegistry.register(paymentAicard);
   SkillRegistry.register(deviceComm);
 }
