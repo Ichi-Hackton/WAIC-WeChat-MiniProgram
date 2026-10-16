@@ -23,6 +23,7 @@
 
 import { addDays, formatDate } from '../utils/datetime';
 import { isCrisisMessage } from '../utils/counseling';
+import { isEmergencyMessage, EMERGENCY_PROMPT } from '../utils/health';
 import {
   isTripIntent,
   isTripFollowup,
@@ -265,6 +266,23 @@ function extractMailBody(intent: string): string | null {
 }
 
 /**
+ * 從意圖提取藥品名（健康顧問域）：引導詞先剝除，「XX藥」疑問後緅前的
+ * 連續漢字段即藥名（貧婪取最長——「阿莫西林膠囊是什麼藥」取全名）；
+ * 提取失敗返回 null（呼叫方回退為意圖原文——雲端 System Prompt 已有
+ * 非藥品輸入的引導形態，不猜藥名是紅線）
+ */
+function extractDrugName(intent: string): string | null {
+  const cleaned = intent
+    .replace(/請問|请问|幫我查|帮我查|幫忙查|帮忙查|我想知道|我想問|我想问|想問一下|想问一下|問一下|问一下|查一下|查詢|查询/g, '')
+    .trim();
+  const m = cleaned.match(
+    /([\u4e00-\u9fa5A-Za-z]{2,12})(?:是什麼藥|是什么药|這個藥|这个药|的?藥效|的?药效|的?副作用|能不能吃|可以吃嗎|可以吃吗|能空腹吃)/,
+  );
+  const name = m?.[1]?.trim();
+  return name || null;
+}
+
+/**
  * 從意圖提取附近搜尋品類詞（「附近的便利店」→ 便利店、「哪裡有打印店」→ 打印店）
  *
  * 兩種形態按優先級匹配：修飾詞前置（附近 / 周邊 / 最近 + 的 + 品類）與
@@ -501,6 +519,16 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     };
   }
 
+  // 急症信號短路（2026-10 健康顧問域配套安全網，緊隨心理危機短路——
+  // 兩者皆為安全短路）：危及生命的症狀描述（胸痛 / 呼吸困難 / 中風徵兆 /
+  // 誤服等，見 utils/health.ts 詞表）一律以本地靜態急診引導文案回應
+  // （120 優先）——不走分診 SKILL、不依賴雲端可達性；雲端 skill-health.ts
+  // 三端點入口另持同款詞表做最終把關。空 tasks + message 走 NEEDS_INPUT
+  // 收斂，與危機短路同構，狀態機零改動
+  if (isEmergencyMessage(intent)) {
+    return { intent, tasks: [], message: EMERGENCY_PROMPT };
+  }
+
   // 支付意圖短路（2026-10 六域回補，聚合收銀台）：獨立短路分支必須優先於
   // 各業務域判定——訂單指令攜帶「高鐵票訂單」等標題詞，若不短路會誤觸發
   // wantsTrain 等域規則產生錯誤下單任務。跳轉模式下真實支付在渠道側
@@ -654,9 +682,16 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   // 結算意圖：購物車已有商品，直接結帳（不重搜不加購；「結帳 / 結算」
   // 歸購物域而非支付聚合——聚合入口詞為「支付 / 付款」，見頭部短路）
   const wantsCheckout = /結[帳账]|结账|結算|结算/.test(intent);
-  // 預約域：域詞或服務詞命中
+  // 醫療域報告解讀詞族（提前聲明）：預約域 SERVICE_MAP 的「體檢」套餐詞
+  // 與「體檢報告」解讀詞重疊，語義主體為解讀時必須讓路（實測 badcase：
+  // 「幫我看看體檢報告，白細胞偏高」誤觸 search_services）。
+  // 三詞族互斥分流見下方醫療健康域區塊（報告 > 藥品 > 分診）
+  const REPORT_HINT_RE =
+    /化驗單|化验单|體檢報告|体检报告|報告解讀|报告解读|白細胞|白细胞|血紅蛋白|血红蛋白|轉氨酶|转氨酶|尿酸|膽固醇|胆固醇|血糖|血常規|血常规/;
+  // 預約域：域詞或服務詞命中（報告解讀語義排除——「體檢報告」非預約體檢）
   const wantsBooking =
-    /預約|预约|預訂|预订/.test(intent) || SERVICE_MAP.some(([re]) => re.test(intent));
+    (/預約|预约|預訂|预订/.test(intent) || SERVICE_MAP.some(([re]) => re.test(intent))) &&
+    !REPORT_HINT_RE.test(intent);
   // 預約查詢意圖（「我的預約」）：只讀清單，不建預約
   const wantsListReservations = /我的預約|我的预约|查.{0,4}預約|查.{0,4}预约/.test(intent);
   // 票務域：演出域詞或目錄劇目 / 藝人詞命中（「車票 / 機票」歸出行域，
@@ -674,9 +709,54 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   // （「煩死了幫我訂杯咖啡」應訂咖啡而非陪聊，見末尾 tasks.length === 0 分支）
   const wantsCounseling =
     /心情|難過|难过|傷心|伤心|焦慮|焦虑|壓[力大]|压[力大]|孤單|孤单|寂寞|[鬱郁][悶闷]|煩|烦|陪我|聊[一]?聊|說說話|说说话|傾訴|倾诉|開心不起來|开心不起来/.test(intent);
+  // 醫療健康域（2026-10 健康顧問 skill.health.advisor）：報告解讀 / 藥品
+  // 通識 / 症狀分診三詞族，按「最具體優先」互斥分流——報告 > 藥品 > 分診
+  // （伴隨症狀詞的用藥疑問歸分診：advice 自帶遵醫囑引導，不拆雙任務）。
+  // 急症詞已於頭部短路，此處僅承接非急症健康諮詢；「附近醫院 / 藥店」
+  // 歸地圖域（wantsNearby 品類詞，本詞表不含地點詞，天然不衝突）且可與
+  // 症狀詞並存雙任務（分診 + 找診所的 DAG 編排）；詞表外表述由 LLM
+  // 主鏈路兜底（規則路徑僅為降級備援，不窮舉症狀）。REPORT_HINT_RE 已
+  // 提前至預約域之前聲明（體檢套餐詞 讓路 體檢報告解讀詞）
+  const MED_QA_RE =
+    /是什麼藥|是什么药|這個藥|这个药|藥效|药效|副作用|吃什麼藥|吃什么药|該吃什麼|该吃什么|能不能吃|可以吃嗎|可以吃吗|能空腹吃/;
+  const SYMPTOM_RE =
+    /發燒|发烧|發熱|发热|低燒|低烧|頭痛|头痛|偏頭痛|咳嗽|嗓子疼|喉嚨痛|喉咙痛|拉肚子|腹瀉|腹泻|嘔吐|呕吐|噁心|恶心|肚子疼|肚子痛|胃疼|胃痛|皮疹|起疹|頭暈|头晕|眩暈|胸悶|胸闷|失眠|睡不著|睡不着|便血|鼻塞|流鼻涕|感冒|牙疼|牙痛|腰疼|腰痛|脖子疼|耳鳴|耳鸣|口腔潰瘍|口腔溃疡|痛經|痛经|月經不調|月经不调|便祕|便秘|腹脹|腹胀|水腫|水肿|發冷|发冷|盜汗|盗汗/;
+  const MEDICAL_VISIT_RE =
+    /去醫院|去医院|看醫生|看医生|看診|看诊|就醫|就医|掛什麼科|挂什么科|挂哪个科|掛哪個科|看哪科|掛號|挂号|急診|急诊|門診|门诊/;
+  const wantsReportExplain = REPORT_HINT_RE.test(intent);
+  const wantsMedInfo = !wantsReportExplain && MED_QA_RE.test(intent) && !SYMPTOM_RE.test(intent);
+  // 就醫意圖（MEDICAL_VISIT_RE）單獨觸發時排除預約域：「預約掛號 / 預約
+  // 門診」已由 booking 承接，無症狀詞時不再疊加空輸入的分診任務；伴隨
+  // 症狀詞（「預約門診，我發燒了」）則雙任務並存，交分診出具體指引
+  const wantsHealthTriage =
+    !wantsReportExplain &&
+    !wantsMedInfo &&
+    (SYMPTOM_RE.test(intent) || (MEDICAL_VISIT_RE.test(intent) && !wantsBooking));
   // 天氣域：只讀查詢；座標由 ctx.userProfile.location 提供（context 構建時
   // wx.getLocation 取得，見 core/context.ts fetchLocation）
   const wantsWeather = /天氣|天气|氣溫|气温|溫度|温度|幾度|几度|下雨/.test(intent);
+  // 天氣預報域（2026-10-16）：「預報 / 未來 N 天」語義 → get_forecast（城市
+  // 名入參，雲端地理編碼，簡繁並列同各域慣例）。優先於實況分支：「查澳門
+  // 未來七天天氣」同時命中兩旗標，錯走實況需座標且語義不符（實況僅當前定位）
+  // 錨定語義（2026-10-16 修訂）：「預報」一詞獨立觸發；「未來 N 天」分支
+  // 必須疊加天氣詞（天氣 / 下雨）——否則「未來三天請陪我聊聊天」「未來
+  // 三天要考試」類無天氣語義的意圖被劫持為預報，整輪答非所問
+  const wantsForecast =
+    /預報|预报/.test(intent) ||
+    (/未來|未来/.test(intent) && /天氣|天气|下雨/.test(intent));
+  // 預報天數解析：「未來三天」→ 3、「未來一周 / 未來七天」→ 7（缺省 7）
+  let forecastDays = 7;
+  const forecastDaysMatch = intent.match(/(?:未來|未来)[的]?(一周|一週|[0-9一二三四五六七兩两幾几])[天日週周]?/);
+  if (forecastDaysMatch) {
+    const tok = forecastDaysMatch[1];
+    if (tok === '一周' || tok === '一週') forecastDays = 7;
+    else if (tok === '兩' || tok === '两') forecastDays = 2;
+    else if (tok === '幾' || tok === '几') forecastDays = 7;
+    else {
+      const n = /^[0-9]$/.test(tok) ? Number(tok) : '一二三四五六七'.indexOf(tok) + 1;
+      if (n >= 1 && n <= 7) forecastDays = n;
+    }
+  }
   // 附近地點搜尋域：POI 查詢（便利店 / 藥店 / 列印店…）。「附近 + 專屬域詞」
   // 的組合歸各專屬域（「附近星巴克」歸咖啡域、「附近賣場」歸購物域），
   // 此處以各域旗標排他，僅承接無專屬 SKILL 的品類詞；wantsTrain / wantsFlight
@@ -1131,11 +1211,69 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     }
   }
 
-  // 天氣查詢：只讀單任務；座標寫字面值（城市僅用於展示標籤）。
-  // 座標缺失時不生成任務——按授權狀態分別引導（拒絕授權 → 開授權；
+  // 醫療健康域（2026-10 健康顧問）：三詞族互斥分流（報告 > 藥品 > 分診，
+  // 詞表定義見上方旗標區）。輸入皆為用戶原文照抄——症狀細節 / 指標數值 /
+  // 藥名上下文交雲端 LLM 理解，規則層不做醫學語義抽取（紅線：不猜醫學
+  // 含義）；分診輸出的推薦科室可供 LLM 主鏈路編排地圖 search_poi
+  // （規則路徑保持單任務簡單）
+  if (wantsReportExplain) {
+    tasks.push({
+      skillId: 'skill.health.advisor',
+      action: 'report_explain',
+      input: { reportText: intent },
+      inputBindings: {},
+      dependsOn: [],
+      summary: '解讀化驗 / 體檢報告',
+    });
+  }
+  if (wantsMedInfo) {
+    const drugName = extractDrugName(intent) ?? intent;
+    tasks.push({
+      skillId: 'skill.health.advisor',
+      action: 'med_info',
+      input: { drugName },
+      inputBindings: {},
+      dependsOn: [],
+      summary: `查詢「${drugName.slice(0, 12)}」藥品通識`,
+    });
+  }
+  if (wantsHealthTriage) {
+    tasks.push({
+      skillId: 'skill.health.advisor',
+      action: 'symptom_triage',
+      input: { symptoms: intent },
+      inputBindings: {},
+      dependsOn: [],
+      summary: '症狀分診與就醫指引',
+    });
+  }
+
+  // 天氣域：預報分支優先（城市名入參，雲端地理編碼，不依賴本機定位），
+  // 其餘「天氣」語義走實況（座標寫字面值，城市僅用於展示標籤）。
+  // 實況座標缺失時不生成任務——按授權狀態分別引導（拒絕授權 → 開授權；
   // 其餘失敗 → 稍後重試），見末尾分支
   const weatherLoc = ctx.userProfile.location;
-  if (wantsWeather && weatherLoc?.lat !== undefined && weatherLoc?.lng !== undefined) {
+  if (wantsForecast) {
+    // 城市取值鏈：意圖命中演示城市表（extractCity，規範名）→ 當前定位
+    // 城市；兩者皆無且無其他域任務時追問（雲端預報支援任意城市名，
+    // 但規則式無從提取時不猜測；已有任務時靜默跳過，不否決整個 Plan）
+    const forecastCity = extractCity(intent)?.name ?? weatherLoc?.city;
+    if (forecastCity) {
+      tasks.push({
+        skillId: 'skill.weather.query',
+        action: 'get_forecast',
+        input: { city: forecastCity, days: forecastDays },
+        inputBindings: {},
+        dependsOn: [],
+        summary: `查${forecastCity}未來 ${forecastDays} 天天氣預報`,
+      });
+    } else if (tasks.length === 0) {
+      return {
+        tasks: [],
+        message: '請告訴我想查哪個城市的天氣預報（如「澳門未來七天天氣」）。',
+      };
+    }
+  } else if (wantsWeather && weatherLoc?.lat !== undefined && weatherLoc?.lng !== undefined) {
     tasks.push({
       skillId: 'skill.weather.query',
       action: 'get_weather',
@@ -1263,6 +1401,6 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
  */
 export const UNSUPPORTED_HINT =
   '尚未支援此意圖。目前可辦：高鐵車次查詢與跳轉 12306 購票、國內航班查詢與跳轉 OTA 購票、' +
-  '實時天氣查詢、附近地點搜尋（便利店 / 藥店 / 列印店等）、星巴克門市查詢與點單、商品搜尋與加購結算、' +
-  '生活服務預約、演出票務搜尋與購票、情感陪伴對話、待支付訂單聚合引導、撥打電話與發郵件（複製引導發送），' +
-  '以及一句話出行行程規劃。';
+  '實時天氣查詢、附近地點搜尋（便利店 / 藥店 / 醫院 / 列印店等）、星巴克門市查詢與點單、商品搜尋與加購結算、' +
+  '生活服務預約、演出票務搜尋與購票、情感陪伴對話、症狀分診與就醫指引、化驗報告解讀與藥品通識查詢、' +
+  '待支付訂單聚合引導、撥打電話與發郵件（複製引導發送），以及一句話出行行程規劃。';

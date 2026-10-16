@@ -21,6 +21,7 @@ import {
   isExplicitLongTerm,
 } from '../storage/preferences';
 import { isCrisisMessage } from '../utils/counseling';
+import { isEmergencyMessage } from '../utils/health';
 import { buildPlannerPrompt } from './prompts/planner';
 import type { ReplanFailedContext } from './prompts/planner';
 import { buildClassifierPrompt } from './prompts/classifier';
@@ -200,6 +201,14 @@ export async function plan(
     return postProcessRulePlan(rulePlan(intent, ctx), intent, ctx, traceId);
   }
 
+  // 0.5 急症信號安全網（與危機短路同構，醫療紅線）：疑似心梗 / 中風 /
+  //     大出血等急症表述以確定性 120 引導文案回應（rulePlan 頭部同款
+  //     短路）——不依賴分類器把健康域判為 task，也不依賴雲端可達性
+  //     （§ 10 安全紅線：主鏈路本地三重安全網之一）
+  if (isEmergencyMessage(intent)) {
+    return postProcessRulePlan(rulePlan(intent, ctx), intent, ctx, traceId);
+  }
+
   // 1. 構造 Prompt（含 availableSkills 簡表）
   const messages = buildPlannerPrompt({
     userIntent: intent,
@@ -253,7 +262,14 @@ export async function plan(
     sinkMemory(intent, validated.memory);
   } catch (e) {
     if (e instanceof LLMParserError) {
-      logError('LLM 輸出解析失敗', { raw: res.text.slice(0, 200) });
+      // 診斷訊息攜帶錯誤類型 + 頭尾切片：斷裂點多在輸出尾巴（貪婪匹配
+      // 併入尾巴文字 / 截斷），僅截頭會恰好遮住病灶（實測復現：缺口回應
+      // 解析失敗但頭部 200 字看起來完好）
+      logError('LLM 輸出解析失敗', {
+        err: e.message,
+        head: res.text.slice(0, 120),
+        tail: res.text.slice(-120),
+      });
       // 「缺少必要參數」類（assertNoPlaceholder 攔截的空值/佔位符）：LLM
       // 已理解意圖但參數填空（如無定位時 city 為空）——先嘗試本地規則式
       // 規劃器兜底，各域槽位自帶缺省與追問（咖啡域無城市兜底上海、票務
@@ -387,6 +403,12 @@ export async function understand(
     return { kind: 'ok' };
   }
 
+  // 急症信號短路（醫療紅線）：同樣不交給分類器自由發揮，按任務續走
+  // 由 plan() 頭部同款安全網截獲並回以確定性 120 引導文案
+  if (isEmergencyMessage(intent)) {
+    return { kind: 'ok' };
+  }
+
   // 2026-10-13 修訂（用戶指令：全量真實調用 LLM）：本地元問題短路與
   // 六域詞快速通道全部移除，所有非危機輸入一律走 LLM 分類器（舊快速
   // 通道是為「分類器 task 定義僅覆蓋出行類、任務被誤判閒聊」而設，
@@ -411,21 +433,23 @@ export async function understand(
   }
   ctx.trace.totalTokens += res.usage.totalTokens;
 
-  // 解析：失敗同樣降級為任務指令（分類器輸出非關鍵路徑）
-  const m = res.text.match(/\{[\s\S]*\}/);
-  if (!m) {
+  // 解析：失敗同樣降級為任務指令（分類器輸出非關鍵路徑）。統一走
+  // extractJson（配對掃描容忍 JSON 後尾巴文字，與 planner 同款防禦；
+  // 分類器 jsonMode 同樣受供應商不支援 response_format 影響）
+  let parsed: unknown;
+  try {
+    parsed = extractJson(res.text);
+  } catch {
     logWarn(`意圖分類輸出無法解析，按任務指令處理（raw: ${res.text.slice(0, 80)}）`);
     return { kind: 'ok' };
   }
-  let parsed: ClassifierOutput;
-  try {
-    parsed = JSON.parse(m[0]) as ClassifierOutput;
-  } catch {
-    logWarn('意圖分類 JSON 解析失敗，按任務指令處理');
+  if (!parsed || typeof parsed !== 'object') {
+    logWarn('意圖分類輸出非物件，按任務指令處理');
     return { kind: 'ok' };
   }
-  if (parsed.kind === 'chat' && parsed.reply && parsed.reply.trim()) {
-    return { kind: 'chat', reply: parsed.reply.trim() };
+  const cls = parsed as ClassifierOutput;
+  if (cls.kind === 'chat' && cls.reply && cls.reply.trim()) {
+    return { kind: 'chat', reply: cls.reply.trim() };
   }
   // kind=task / 缺 reply 的 chat（模型違規）→ 一律按任務續走
   return { kind: 'ok' };
@@ -440,6 +464,7 @@ const ACTION_LABELS: Record<string, string> = {
   search_flights: '查詢航班',
   book_flight: '生成購票卡跳轉 OTA 下單',
   get_weather: '查詢實時天氣',
+  get_forecast: '查詢未來天氣預報',
   search_poi: '搜尋附近地點',
   search_store: '查詢星巴克門市',
   place_order: '下單點單卡跳轉星巴克完成',
@@ -479,6 +504,10 @@ const ACTION_LABELS: Record<string, string> = {
   // 2026-10-14 飛豬旅行域（skill.travel.fliggy）：FlyAI MCP 只讀搜索鏈
   search_hotels: '搜索目的地酒店',
   ai_search: '飛豬 AI 旅行推薦',
+  // 健康顧問域（skill.health.advisor）：症狀分診 / 報告解讀 / 藥品通識
+  symptom_triage: '症狀分診與就醫指引',
+  report_explain: '解讀化驗 / 體檢報告',
+  med_info: '查詢藥品通識',
 };
 
 /**

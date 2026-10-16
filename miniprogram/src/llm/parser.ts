@@ -4,9 +4,12 @@
  * 規範來源：.qoder/rules/Agent.md § 8.3
  *
  * 規則：
- *   - LLM 輸出**必須**以正則 /\{[\s\S]*\}/ 抽取 JSON
+ *   - LLM 輸出抽取 JSON：括號配對掃描優先（取第一個完整物件），
+ *     貪婪正則 /\{[\s\S]*\}/（規範 § 8.3 原始要求）降級為回退
  *   - 抽取後必須通過 schema 驗證，否則拋錯
- *   - 容錯：允許 LLM 在 JSON 外面夾雜文字（透過正則抽取）
+ *   - 容錯：允許 LLM 在 JSON 外面夾雜文字（供應商不支援
+ *     response_format 時 jsonMode 失效——llm-chat.ts 對 400 會丟掉
+ *     該參數重試，上游僅靠 prompt 約束，輸出可能帶散文尾巴）
  */
 
 import type { Plan } from '../types/plan';
@@ -59,18 +62,68 @@ export interface PlannerLLMOutput {
   memory?: Record<string, string>;
 }
 
+/**
+ * 括號配對掃描：從 text 首個 '{' 起找出配對閉合的第一個完整 JSON 物件。
+ *
+ * 相比貪婪正則（首 '{' 吃到末 '}'）的優勢：JSON 之後的尾巴文字（供應商
+ * jsonMode 失效時的散文附注 / 重複輸出 / 閉合說明，哪怕含 '}'）不會被
+ * 併入解析跨度；字串值內的 '{' '}' 與 \" 轉義會被正確跳過（實測復現：
+ * 缺口回應「{...,"message":"\"文案\""}+尾巴」被貪婪正則併入尾巴後
+ * JSON.parse 失敗，能力缺口引導退化為通用解析錯誤）。找不到配對物件
+ * （如輸出截斷導致深度不歸零）返回 null，由呼叫方回退貪婪正則。
+ */
+export function extractFirstJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+  let depth = 0;
+  let inStr = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (c === '\\') i++; // 轉義序列跳過下一字元（\" \\ 等）
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') inStr = true;
+    else if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
 /** 抽取 JSON 對象（含陣列或對象） */
 export function extractJson(rawText: string): unknown {
-  // 先嘗試 Markdown 包裹 ```json ... ```
+  // 先嘗試 Markdown 包裹 ```json ... ```（fence 內仍可能夾尾巴，同走配對掃描）
   const fenced = /```(?:json)?\s*([\s\S]*?)```/.exec(rawText);
   if (fenced && fenced[1]) {
+    const inner = fenced[1].trim();
     try {
-      return JSON.parse(fenced[1].trim());
+      return JSON.parse(inner);
+    } catch {
+      /* fallthrough */
+    }
+    const fencedObj = extractFirstJsonObject(inner);
+    if (fencedObj) {
+      try {
+        return JSON.parse(fencedObj);
+      } catch {
+        /* fallthrough */
+      }
+    }
+  }
+  // 配對掃描：首個完整物件優先（容忍 JSON 後尾巴文字）
+  const balanced = extractFirstJsonObject(rawText);
+  if (balanced) {
+    try {
+      return JSON.parse(balanced);
     } catch {
       /* fallthrough */
     }
   }
-  // 再嘗試首個 JSON 對象
+  // 回退貪婪正則：掃描器無配對 / 候選非法時保持舊抽取語義
   const objMatch = /\{[\s\S]*\}/.exec(rawText);
   if (objMatch) {
     try {
