@@ -151,16 +151,21 @@ function extractNameBefore(left: string): string | null {
  * （確認彈窗缺 passengerName → 執行校驗失敗）。此為代碼級兜底，
  * 與 prompt 約束（規則 8 乘車人寫入義務）構成雙保險。
  *
- * 回填優先級：對話提取（本輪明說最準確）> fallback（乘車人簿默認人，
- * 由調用方從 storage 讀入後傳入——本模組保持純函數不碰 wx）。
+ * 回填源分域（2026-10-16 黑盒測試 D9 修訂）：
+ *   - 乘車人域（train / flight）：對話明說 > 乘車人簿默認人
+ *   - 觀演人域（ticket）：僅對話明說——乘車人簿是乘車實名授權，觀演人
+ *     是演出入場實名，跨角色復用等於替用戶代答實名信息（黑盒實測：
+ *     用戶未提供觀演人時靜默以乘車人簿默認人補位並通過雲端必填校驗，
+ *     生成不可靠購票需求卡；修訂後此類 Plan 由
+ *     findFirstMissingBookingPassenger 攔下轉為追問）
  *
  * 覆蓋條件（三選一）：
  *   1. 欄位缺失（LLM 漏填）
- *   2. 姓名為 rule-planner 演示佔位（「演示乘客」）
- *   3. 證號為 rule-planner 演示佔位（110101199001011234）
+ *   2. 姓名為 rule-planner 演示占位（「演示乘客」/「演示觀演人」）
+ *   3. 證號為 rule-planner 演示占位（110101199001011234）
  * 任務已填真實乘車人時不覆蓋（寧可不填也不填錯，錯誤姓名下單比缺參更糟）
  *
- * @param fallback 乘車人簿默認人（無則傳 null；對話提取優先於此值）
+ * @param fallback 乘車人簿默認人（無則傳 null；僅乘車人域可用，觀演人域忽略）
  * @returns 是否發生了回填（供調用方記日誌；日誌不得攜帶姓名 / 證號明文）
  */
 export function applyPassengerSlot(
@@ -169,12 +174,12 @@ export function applyPassengerSlot(
   fallback: PassengerInfo | null = null,
 ): boolean {
   const fromChat = extractPassenger(messages);
-  const p = fromChat ?? fallback;
-  if (!p) return false;
   let patched = false;
   for (const t of plan.tasks) {
     const fields = BOOKING_FIELDS.find((f) => f.skillId === t.skillId && f.action === t.action);
     if (!fields) continue;
+    const p = fromChat ?? (fields.profileFallback ? fallback : null);
+    if (!p) continue;
     const nameVal = typeof t.input[fields.nameField] === 'string' ? (t.input[fields.nameField] as string) : '';
     const idVal = typeof t.input[fields.idField] === 'string' ? (t.input[fields.idField] as string) : '';
     const nameIsPlaceholder = !nameVal || DEMO_NAMES.has(nameVal);
@@ -251,7 +256,8 @@ export function findFirstMissingBookingPassenger(plan: Plan): MissingPassengerIn
 /**
  * 需實名信息的下單任務 → 姓名 / 證號欄位映射（skillId + action 精準匹配）。
  * 2026-10 六域回補：票務 create_order 的觀演人與乘車人同構（實名 +
- * 跳轉渠道下單），納入同一回填 / 追問鏈路
+ * 跳轉渠道下單），納入同一回填 / 追問鏈路。profileFallback 標記回填源
+ * 分域（見 applyPassengerSlot 注釋 D9 修訂說明）
  */
 const BOOKING_FIELDS: Array<{
   skillId: string;
@@ -260,10 +266,12 @@ const BOOKING_FIELDS: Array<{
   idField: string;
   /** 角色中文標籤（追問文案 / 日誌用，不攜帶英文欄位名） */
   roleLabel: string;
+  /** 是否允許以乘車人簿默認人回填（觀演人角色不同，必須用戶明確提供） */
+  profileFallback: boolean;
 }> = [
-  { skillId: 'skill.train.12306', action: 'book_ticket', nameField: 'passengerName', idField: 'passengerIdNo', roleLabel: '乘車人' },
-  { skillId: 'skill.flight.variflight', action: 'book_flight', nameField: 'passengerName', idField: 'passengerIdNo', roleLabel: '乘車人' },
-  { skillId: 'skill.ticket.show', action: 'create_order', nameField: 'viewerName', idField: 'viewerIdNo', roleLabel: '觀演人' },
+  { skillId: 'skill.train.12306', action: 'book_ticket', nameField: 'passengerName', idField: 'passengerIdNo', roleLabel: '乘車人', profileFallback: true },
+  { skillId: 'skill.flight.variflight', action: 'book_flight', nameField: 'passengerName', idField: 'passengerIdNo', roleLabel: '乘車人', profileFallback: true },
+  { skillId: 'skill.ticket.show', action: 'create_order', nameField: 'viewerName', idField: 'viewerIdNo', roleLabel: '觀演人', profileFallback: false },
 ];
 
 /** rule-planner 演示佔位姓名集（真實乘車人 / 觀演人信息應覆蓋之） */

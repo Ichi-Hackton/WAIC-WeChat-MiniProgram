@@ -92,15 +92,39 @@ const INPUT_LABELS: Record<string, string> = {
   seatType: '座位',
   trainNo: '車次',
   passengerName: '乘車人',
+  viewerName: '觀演人',
   city: '城市',
   keyword: '關鍵詞',
   name: '名稱',
+  productName: '品名',
   quantity: '數量',
   flightNo: '航班',
   cabin: '艙位',
   subject: '主題',
   body: '正文',
+  pickupType: '取餐方式',
 };
+
+/** 品名明細項（咖啡 items 等點單品項：無金額，有品名 / 數量 / 規格） */
+interface NamedItem {
+  name?: string;
+  quantity?: number;
+  size?: string;
+}
+
+/** 找出入參中第一個「元素含 name 欄位」的陣列（點單品項；金額明細優先於此） */
+function findNamedItems(input: Record<string, unknown>): NamedItem[] | undefined {
+  for (const v of Object.values(input)) {
+    if (
+      Array.isArray(v) &&
+      v.length > 0 &&
+      v.every((it) => it && typeof it === 'object' && 'name' in (it as Record<string, unknown>))
+    ) {
+      return v as NamedItem[];
+    }
+  }
+  return undefined;
+}
 
 /** 入參 → 逐行「中文標籤：標量值」（未映射鍵、物件 / 陣列值一律略過） */
 function formatScalarLines(input: Record<string, unknown>): string {
@@ -116,12 +140,16 @@ function formatScalarLines(input: Record<string, unknown>): string {
 /**
  * 入參明細格式化（規範 § 10 紅線：支付前強制展示明細）
  *
- * 金額感知（三級匹配，確保用戶確認前能看到金額）：
- *   1. 元素含 amountCent 的陣列 → 訂單明細逐項展示 + 合計（如星巴克 items）
- *   2. 標量 priceCent / amountCent → 單筆金額展示（如火車票 book_ticket，
+ * 金額感知（四級匹配，確保用戶確認前能看到金額 / 品項）：
+ *   1. 元素含 amountCent 的陣列 → 訂單明細逐項展示 + 合計（如星巴克 items
+ *      帶金額形態）
+ *   2. 元素含 name 的陣列 → 品名 × 數量逐項展示（如咖啡點單 items，
+ *      2026-10-16 黑盒測試 D7 修訂新增——此前三級全落空時咖啡確認卡
+ *      明細退化為「任務參數（略）」，用戶確認前看不到買了什麼）
+ *   3. 標量 priceCent / amountCent → 單筆金額展示（如火車票 book_ticket，
  *      值來自上游查詢任務的 inputBindings 注入——規劃層保證「先查詢後下單」
  *      依賴鏈，使確認彈窗展示即時票價；下單金額以雲端再核實為準）
- *   3. 其他 → 鍵值中文標籤行（未映射欄位略過，不輸出原始 JSON）
+ *   4. 其他 → 鍵值中文標籤行（未映射欄位略過，不輸出原始 JSON）
  */
 function formatInputDetail(input: Record<string, unknown>): string {
   const items = findAmountItems(input);
@@ -132,6 +160,15 @@ function formatInputDetail(input: Record<string, unknown>): string {
     });
     const total = items.reduce((s, it) => s + (it.amountCent ?? 0) * (it.quantity ?? 1), 0);
     lines.push(`合計：${formatCents(total)}`);
+    return lines.join('\n');
+  }
+  const named = findNamedItems(input);
+  if (named) {
+    const lines = named.map((it) => {
+      const size = typeof it.size === 'string' && it.size ? `（${it.size}）` : '';
+      const qty = typeof it.quantity === 'number' ? it.quantity : 1;
+      return `· ${String(it.name ?? '品項')}${size} × ${qty}`;
+    });
     return lines.join('\n');
   }
   const scalarCent =

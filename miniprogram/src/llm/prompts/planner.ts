@@ -141,14 +141,17 @@ function buildContextString(ctx: AgentContext, maxRecentMsgs = 6): string {
   lines.push(`- 用戶 ID：${ctx.userId}`);
   lines.push(`- 當前時間：${new Date().toISOString()}`);
 
-  // 出發城市權威行（交通任務 from 的唯一取值依據；地址簿 > 定位 > 追問）。
-  // 必須置於位置行之前——LLM 對「用戶位置」的追問衝動由本行直接抑制
+  // 出發城市權威行（交通任務 from 的取值依據；地址簿 > 定位 > 追問）。
+  // 必須置於位置行之前——LLM 對「用戶位置」的追問衝動由本行直接抑制。
+  // 2026-10-16 黑盒測試 D5 修訂：用戶點名出發地優先級明確高於本行——
+  // 蓄意以「授權默認值」語義表述，禁止定位 / 地址簿默認值覆蓋用戶明說
+  // 的出發地（badcase：「明天從北京到廣州」被定位城市珠海覆蓋為 from=廣州）
   const depCity = ctx.userProfile.location?.city;
   if (depCity) {
     const src =
       ctx.userProfile.location?.citySource === 'address_book' ? '地址簿默認地址' : '定位';
     lines.push(
-      `- 出發城市：${depCity}（來源：${src}）——交通任務（search_train / search_flights）的 from 在用戶未另行點名時直接取此值，禁止向用戶追問出發城市`,
+      `- 出發城市：${depCity}（來源：${src}，僅為「用戶未點名出發地」時的授權默認值）——交通任務（search_train / search_flights）的 from 取值優先級：用戶意圖或最近對話明確說出的出發地（如「從北京出發」「北京到上海」的北京）永遠最高，其次才用本行默認值；兩者衝突時嚴禁以本行覆蓋用戶點名的出發地，也禁止向用戶追問出發城市`,
     );
   } else {
     lines.push(
@@ -267,7 +270,7 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
 1. **必須**以 JSON 對象回應，**禁止**任何多餘文字、解釋、markdown 包裹。
 2. **只使用**「可用 SKILL 簡表」中出現的 skillId 與 action。
 3. 任務之間若有資料依賴（如「查到的車次」要傳給「下單」），必須用 inputBindings 串接，否則並行執行。每個 task 必須帶 "id" 欄位（"task_001" 起連續編號），inputBindings.fromTaskId 與 dependsOn 只能引用這些 id 原文——自編 id（如 task_e01）會導致執行時綁定失敗回滚。
-4. **寫操作一律 requiresHumanConfirm=true**；查詢類為 false。
+4. 任務物件不含 requiresHumanConfirm 欄位（確認檔位由各 capability 元數據統一聲明，2026-10 最小打擾修訂：可回滾寫操作默認自動執行，支付 / 不可逆場景才攔確認）——嚴禁在輸出中自造該欄位。
 5. 無依賴的任務可並行（dependsOn: []）。
 6. 若用戶意圖無法對應任何 SKILL，分兩種情況回應空 tasks：
    - **缺必要參數**（補充後可規劃，如缺乘車人）→ 回應 { "tasks": [] } 並在
@@ -279,8 +282,11 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
 7. 每個 task 必須有 summary 欄位（人類可讀，≤ 30 字），供確認畫面展示。
 8. **下單 / 支付前必須先規劃同域查詢任務**（如 book_ticket 前先 search_train），
    並遵守「字面值優先」：
-   - 查詢任務的入參（from / to / date 等）一律寫字面值：from 優先取上下文
-     「出發城市」行（用戶另行點名的除外），其餘從用戶意圖或「最近對話」推斷；
+   - 查詢任務的入參（from / to / date 等）一律寫字面值：from 取值三級
+     優先——用戶意圖中明確點名的出發地最高（如「從北京到廣州」的
+     北京，嚴禁以定位 / 地址簿默認城市覆蓋），其次取上下文「出發城市」
+     行（僅為用戶未點名時的授權默認值）；其餘參數從用戶意圖或
+     「最近對話」推斷；
    - 下單任務中用戶已點名的確定參數（如 trainNo）也寫字面值；
    - 上下文若有「已提供乘車人」行，book_ticket 的 passengerName / passengerIdNo
      必須以其字面值寫入（嚴禁省略，省略會導致執行校驗失敗）；
@@ -292,7 +298,8 @@ const PLANNER_SYSTEM = `你是 MicroMate 的任務編排器，負責把用戶的
      eventId ← data.firstEventId、sessionId ← data.firstAvailableSessionId、
      tierId ← data.firstAvailableTierId、priceCent ← data.firstAvailablePriceCent
      （均引自前級任務）；觀演人 viewerName / viewerIdNo 用戶未提供時回空
-     tasks 追問（與乘車人同規則，嚴禁編造）；
+     tasks 追問（與乘車人同規則，嚴禁編造，也嚴禁以乘車人簿 / 上下文
+     乘車人信息代替觀演人——觀演人必須由用戶針對本演出明確提供）；
    - 預約意圖為兩級鏈：search_services → create_reservation，綁定固定路徑：
      serviceId ← data.firstServiceId、startTime ← data.firstAvailableStartTime、
      priceCent ← data.firstPriceCent；用戶已點名時段時 startTime 寫字面值（如

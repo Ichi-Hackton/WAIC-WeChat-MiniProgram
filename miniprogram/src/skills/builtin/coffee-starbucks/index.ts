@@ -4,12 +4,19 @@
  * 規範來源：.qoder/rules/Agent.md § 7.1
  *
  * 提供能力：
- *   - search_store  ：查附近門市（idempotent, no confirm）
- *   - place_order   ：生成點單需求卡並跳轉星巴克小程序（NOT idempotent, requires confirm, reversible）
+ *   - search_store   ：查附近門市（idempotent, no confirm）
+ *   - place_order    ：生成點單需求卡並跳轉星巴克小程序（NOT idempotent, no confirm, reversible）
  *
  * 2026-10 六域回補（跳轉模式）：星巴克開放平台僅面向企業資質 ISV，
  * 個人主體拿不到 API，place_order 改為「點單需求卡（pending_external）
  * + 跳轉星巴克官方小程序完成真實點單與支付」——與 train/flight 同構。
+ *
+ * requiresHumanConfirm 判定（Agent.md § 7.1 第 4 條，2026-10-16 黑盒測試
+ * D6 修訂）：place_order 設 false——跳轉模式下本端不扣款（真實點單與
+ * 支付由用戶在星巴克小程序側自主完成），pending_external 可隨時 cancel /
+ * rollback，與 mcdonalds place_mcd_order 論證同構，屬 T4 執行可逆檔位，
+ * 按「最小打擾」原則不攔確認（此前 true 為跳轉模式改造前的舊口徑殘留，
+ * 與 SKILL 層 2026-10 修訂及 prompt 規則 4 新口徑衝突）。
  */
 
 import type { AgentContext } from '../../../types/context';
@@ -146,7 +153,8 @@ export const meta = {
       },
       idempotent: false,
       reversible: true,
-      requiresHumanConfirm: true,
+      // T4 執行可逆（見檔案頭注釋 D6 修訂說明）：不攔確認，靠 rollback + 渠道側支付把关
+      requiresHumanConfirm: false,
       estimatedLatencyMs: 1500,
     },
   ],

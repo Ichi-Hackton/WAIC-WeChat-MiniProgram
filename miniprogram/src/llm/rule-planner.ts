@@ -11,8 +11,10 @@
  *
  * 注意：
  *   1. 僅為降級備援，正式環境一律走雲端 LLM
- *   2. 寫操作的 requiresHumanConfirm 由 capability schema 統一約束，
- *      本規劃器生成的下單任務照常觸發 checkpoint 確認（§ 10 紅線）
+ *   2. 寫操作的確認檔位由 capability 元數據統一聲明（2026-10 最小打擾
+ *      修訂：可回滾寫操作默認自動執行；聲明 requiresHumanConfirm=true 的
+ *      任務——如票務 create_order / 瑞幸 place_luckin_order——照常觸發
+ *      確認卡，與 LLM 路徑同構）
  *   3. 下單任務的乘客為演示資料，確認彈窗會完整展示入參
  *
  * 2026-10 六域回補（跳轉模式）：咖啡 / 購物 / 預約 / 票務 / 陪伴 / 支付

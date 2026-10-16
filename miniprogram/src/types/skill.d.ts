@@ -50,7 +50,9 @@ export interface SkillCapability {
   reversible: boolean;
   /**
    * 是否需要人類確認。
-   * **所有寫操作必須為 true**（規範 § 10 紅線）
+   * 2026-10 修訂（最小打擾）：寫操作默認 false（可回滾寫操作靠 rollback
+   * 安全网自動執行）；僅支付 / 隱私 / 不可逆場景設 true（= 強制升檔 T3
+   * 起草待確認，檔位模型見 Agent.md § 2.1）。
    */
   requiresHumanConfirm: boolean;
   /** 預估延遲（毫秒），用於 Scheduler 排程估算 */
