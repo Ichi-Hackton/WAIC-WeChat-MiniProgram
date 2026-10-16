@@ -201,9 +201,15 @@ export async function getOrder(orderId: string): Promise<ExternalOrder | null> {
 }
 
 /**
- * 取消訂單（歸屬鑒權內建，防 IDOR——與各 skill 原 Map 版語義一致）
+ * 取消訂單（歸屬鑒權內建，防 IDOR）
  *
- * 回傳分流：not_found（404）/ forbidden（403）/ ok
+ * 冪等語義（2026-10-16 黑盒測試 D1 修訂）：重複取消返回 ok 而非 404——
+ * cancel 的後置條件是「訂單不再活躍」，重複調用時後置條件已滿足；
+ * rollback 鏈路因此天然冪等（訂單已被用戶手動取消後的自動回滾不會
+ * 誤判失敗）。與 smoke-luckin-didi.ps1 L6 既有契約、RESTful DELETE
+ * 冪等慣例對齊。
+ *
+ * 回傳分流：not_found（404）/ forbidden（403）/ ok（含重複取消）
  */
 export async function cancelOrder(orderId: string, owner: string): Promise<MutateResult> {
   return mutateStatus(orderId, owner, 'cancelled');
@@ -214,15 +220,21 @@ export async function completeOrder(orderId: string, owner: string): Promise<Mut
   return mutateStatus(orderId, owner, 'completed');
 }
 
-/** 狀態變更共用：歸屬鑒權 → 更新（含從記憶體 / DB 刪除取消態的統一語義為狀態標記） */
+/**
+ * 狀態變更共用：歸屬鑒權 → 狀態標記（雙模式同構）
+ *
+ * 2026-10-16 D1 修訂：記憶體模式取消不再物理刪除，改為狀態標記——
+ * 與 MySQL 模式對齊（此前雙模式語義分裂：記憶體重複取消 404、
+ * MySQL 重複取消 ok）。getOrder 含已取消記錄不變；各域 listOrders
+ * 均按 status 顯式過濾，取消記錄留存不影響清單語義，另供行程回溯。
+ */
 async function mutateStatus(orderId: string, owner: string, next: OrderStatus): Promise<MutateResult> {
   await ensureReady();
   if (!pool) {
     const order = memoryOrders.get(orderId);
     if (!order) return 'not_found';
     if (order.owner !== owner) return 'forbidden';
-    if (next === 'cancelled') memoryOrders.delete(orderId);
-    else order.status = next;
+    order.status = next;
     return 'ok';
   }
   // 單條 UPDATE 同時完成存在性與歸屬校驗（affectedRows=0 ⇒ 不存在或越權，

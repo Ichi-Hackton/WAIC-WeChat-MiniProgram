@@ -513,6 +513,13 @@ const handleCancelOrder: RouteHandler = async (body, ctx) => {
   if (order.owner !== ctx.openid) {
     return forbidden('無權取消他人訂單');
   }
+  // 冪等取消（2026-10-16 黑盒測試 D1 修訂）：已取消訂單直接返回 ok，
+  // 不再打上游 cancel-order（黑盒實測重複取消會以上游業務錯 503 透傳，
+  // 與 booking/train/ticket 的 ok 語義分裂）；置於歸屬鑒權之後，
+  // 越權探測仍被 403 攔截，不改變 IDOR 防線
+  if (order.status === 'cancelled') {
+    return ok({ ok: true, orderId: input.orderId, status: 'cancelled' });
+  }
 
   try {
     const mcdOrderId = typeof order.payload.mcdOrderId === 'string' ? order.payload.mcdOrderId : '';

@@ -71,7 +71,7 @@ if (rid) {
   res = await call('/api/skill/skill.booking.center/cancel_reservation', OWNER, { reservationId: rid });
   assert('booking 本人取消 → ok', res.status === 200 && res.data?.ok === true, JSON.stringify(res).slice(0, 80));
   res = await call('/api/skill/skill.booking.center/cancel_reservation', OWNER, { reservationId: rid });
-  assert('booking 重複取消 → code=404', res.code === 404, JSON.stringify(res).slice(0, 100));
+  assert('booking 重複取消 → 冪等 ok（2026-10-16 D1 修訂：cancel 後置條件已滿足，雙存儲模式同構）', res.status === 200 && res.data?.ok === true, JSON.stringify(res).slice(0, 100));
 }
 
 // --- 支付聚合邊界（先清理不可約時段觀察所生的訂單，再驗空清單）---
