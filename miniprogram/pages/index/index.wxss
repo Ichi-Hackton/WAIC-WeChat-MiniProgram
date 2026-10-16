@@ -1219,3 +1219,68 @@ page {
   padding: 10rpx 28rpx;
   text-align: center;
 }
+
+/* ===== 健康顧問交付卡（2026-10 健康顧問域）===== */
+
+/* 緊迫度徽章：四檔安全語義配色（紅=立即急診 / 橙=24 小時內就診 /
+   藍=擇期門診 / 綠=居家觀察），與卡身米色系對比確保第一眼可辨 */
+.health-badge {
+  display: inline-block;
+  margin: 16rpx 0 4rpx;
+  padding: 8rpx 24rpx;
+  border-radius: 8rpx;
+  font-size: 24rpx;
+  font-weight: 600;
+  letter-spacing: 2rpx;
+}
+
+.health-badge-emergency {
+  background: #C0392B;
+  color: #FFFDF8;
+}
+
+.health-badge-urgent_care {
+  background: #D35400;
+  color: #FFFDF8;
+}
+
+.health-badge-routine {
+  background: #2E6DA4;
+  color: #FFFDF8;
+}
+
+.health-badge-self_care {
+  background: #3E7C4F;
+  color: #FFFDF8;
+}
+
+/* 科室 / 類別標籤列：膠囊排布，推薦科室可一眼掃讀 */
+.health-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12rpx;
+  margin: 16rpx 0 4rpx;
+}
+
+.health-chip {
+  padding: 6rpx 20rpx;
+  border: 1rpx solid #C9A86A;
+  border-radius: 999rpx;
+  background: #F6EFE2;
+  color: #8B7355;
+  font-size: 22rpx;
+  letter-spacing: 1rpx;
+}
+
+/* 行級警示：redFlags 與異常指標行左側紅框 + 值文本警示色，
+   與普通行（灰棕標籤 + 深棕值）拉開層級 */
+.order-line-warn {
+  border-left: 6rpx solid #C0392B;
+  padding-left: 12rpx;
+  margin: 4rpx 0;
+  background: #FBF3EF;
+}
+
+.order-line-warn .order-value {
+  color: #A93226;
+}

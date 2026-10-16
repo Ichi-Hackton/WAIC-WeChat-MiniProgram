@@ -159,6 +159,18 @@ interface WeatherCard extends CardKey {
   sourceReal: boolean;
 }
 
+/** 天氣預報交付卡（2026-10-16）：城市 + 每日一行（日期週幾 / 現象 / 溫度區間） */
+interface ForecastCard extends CardKey {
+  type: 'forecast';
+  city: string;
+  /** 每日一行：label「10/17 週六」、value「多雲 18~26°」 */
+  rows: Array<{ label: string; value: string }>;
+  /** 數據源標籤（Open-Meteo / 模擬數據） */
+  sourceLabel: string;
+  /** 是否即時數據（決定標籤配色） */
+  sourceReal: boolean;
+}
+
 /** 通用兜底交付卡：頁面專用卡未覆蓋的 action 走 interaction/card-render 渲染 */
 interface GenericCard extends CardKey {
   type: 'generic';
@@ -166,6 +178,22 @@ interface GenericCard extends CardKey {
   /** 數據源標籤（skillId.action） */
   subtitle?: string;
   lines: Array<{ label: string; value: string }>;
+}
+
+/** 健康顧問卡（2026-10 健康顧問域）：緊迫度徽章四檔配色（紅=立即急診 /
+ *  橙=24 小時內就診 / 藍=擇期門診 / 綠=居家觀察，安全語義配色）+
+ *  科室 / 類別標籤列 + 行級警示 tone（redFlags 紅框、異常指標高亮）；
+ *  guard 形態 subtitle 標「安全守衛」（非 LLM 生成，不加 AI 標識） */
+interface HealthCard extends CardKey {
+  type: 'health';
+  title: string;
+  /** 來源標籤（AI 生成 / 安全衛） */
+  subtitle?: string;
+  /** 緊迫度徽章（分診與 guard 形態；四檔配色見 wxss health-badge-*） */
+  badge?: { level: 'emergency' | 'urgent_care' | 'routine' | 'self_care'; text: string };
+  /** 標籤列（推薦科室 / 藥品類別） */
+  chips?: string[];
+  lines: Array<{ label: string; value: string; tone?: 'warn' }>;
 }
 
 /** 計劃進度卡（過程展示，徽章隨任務事件更新） */
@@ -270,7 +298,7 @@ interface ConfirmCard extends CardKey {
   status: 'pending' | 'approved' | 'rejected';
 }
 
-type AnyCard = TrainCard | FlightCard | JumpCard | WeatherCard | GenericCard | PlanCard | MemoryCard | ProfileCard | GapCard | DynamicCard | RoutineSaveCard | PanelCard | ConfirmCard;
+type AnyCard = TrainCard | FlightCard | JumpCard | WeatherCard | ForecastCard | GenericCard | HealthCard | PlanCard | MemoryCard | ProfileCard | GapCard | DynamicCard | RoutineSaveCard | PanelCard | ConfirmCard;
 
 /** 確認卡應答句柄登記（消息 ID → respond；函式不可序列化，不入 data，
  *  頁面卸載時全部拒絕出清——fail-closed） */
@@ -484,6 +512,7 @@ const DEFAULT_EXAMPLES: Array<{ text: string; label: string }> = [
   { text: '預約明天下午羽毛球場地', label: '生活預約' },
   { text: '周六去上海看球賽', label: '規劃行程' },
   { text: '有點難過，陪我聊聊', label: '陪伴聊天' },
+  { text: '我有點發燒頭痛，要去醫院嗎', label: '症狀分診' },
 ];
 
 /** 快捷入口最多展示數（與出廠範例數對齊，避免擠佔輸入區） */
@@ -835,6 +864,202 @@ function buildPoiCard(data: unknown): GenericCard | null {
     key: `poi-${kw}-${pois.length}-${fmtDistance(pois[0].distanceM)}`,
     title: `附近的「${kw}」${sourceTag}`,
     lines,
+  };
+}
+
+/* ============ 健康顧問交付卡（2026-10 skill.health.advisor） ============ */
+
+/** 化驗指標狀態 → 中文標籤（卡片文案用） */
+const REPORT_STATUS_LABELS: Record<string, string> = {
+  normal: '正常',
+  high: '偏高',
+  low: '偏低',
+  abnormal: '異常',
+};
+
+/** 分診徽章預設文案（雲端 urgencyLabel 缺失時的四檔兜底） */
+const URGENCY_BADGE_DEFAULTS: Record<string, string> = {
+  emergency: '立即急診',
+  urgent_care: '24 小時內就診',
+  routine: '擇期門診',
+  self_care: '居家觀察',
+};
+
+/**
+ * 急症守衛卡（三 capability 共用）：mode:'guard' 為確定性固定文案（非
+ * LLM 生成），徽章固定 emergency 紅檔（立即急診語義）；核心是 120
+ * 引導，確定性文案不加 AI 標識（合規標識僅限真實 LLM 生成內容）
+ */
+function buildHealthGuardCard(data: unknown): HealthCard | null {
+  const d = data as {
+    departments?: unknown;
+    advice?: unknown;
+    disclaimer?: unknown;
+  } | undefined;
+  const advice = typeof d?.advice === 'string' ? d.advice.trim() : '';
+  if (!advice) return null;
+  const departments = Array.isArray(d?.departments)
+    ? (d?.departments as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim() !== '').slice(0, 3)
+    : [];
+  const disclaimer = typeof d?.disclaimer === 'string' ? d.disclaimer : '';
+  return {
+    type: 'health',
+    key: `health-guard-${Date.now()}`,
+    title: '疑似急症：請立即就醫',
+    subtitle: '安全守衛',
+    badge: { level: 'emergency', text: '立即急診' },
+    ...(departments.length > 0 ? { chips: departments } : {}),
+    lines: [
+      { label: '立即行動', value: advice, tone: 'warn' },
+      ...(disclaimer ? [{ label: '免責聲明', value: disclaimer }] : []),
+    ],
+  };
+}
+
+/** symptom_triage 成功 → 分診卡（structured 形態：緊迫度徽章四檔配色 /
+ *  科室標籤列 / 常見情況 / 就醫建議 / 警示信號；ai 生成標識與免責聲明
+ *  為合規必附行） */
+function buildTriageCard(data: unknown): HealthCard | null {
+  const d = data as {
+    mode?: unknown;
+    urgency?: unknown;
+    urgencyLabel?: unknown;
+    departments?: unknown;
+    possibility?: unknown;
+    advice?: unknown;
+    redFlags?: unknown;
+    disclaimer?: unknown;
+  } | undefined;
+  if (d?.mode === 'guard') return buildHealthGuardCard(data);
+  const advice = typeof d?.advice === 'string' ? d.advice.trim() : '';
+  if (!advice) return null;
+  const departments = Array.isArray(d?.departments)
+    ? (d?.departments as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim() !== '').slice(0, 3)
+    : [];
+  const redFlags = Array.isArray(d?.redFlags)
+    ? (d?.redFlags as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim() !== '').slice(0, 4)
+    : [];
+  // urgency 非法 → 保守升檔 urgent_care（與雲端窄化同款寧可升檔原則）
+  const level: 'emergency' | 'urgent_care' | 'routine' | 'self_care' =
+    d?.urgency === 'emergency' || d?.urgency === 'routine' || d?.urgency === 'self_care'
+      ? d.urgency
+      : 'urgent_care';
+  const labelRaw = typeof d?.urgencyLabel === 'string' ? d.urgencyLabel.trim().slice(0, 24) : '';
+  const badgeText = labelRaw || URGENCY_BADGE_DEFAULTS[level];
+  return {
+    type: 'health',
+    key: `triage-${Date.now()}`,
+    title: '症狀分診與就醫指引',
+    subtitle: `${BRAND_AI_GENERATED_BY} AI 生成`,
+    badge: { level, text: badgeText },
+    ...(departments.length > 0 ? { chips: departments } : {}),
+    lines: [
+      ...(typeof d?.possibility === 'string' && d.possibility.trim()
+        ? [{ label: '常見情況', value: d.possibility.trim() }]
+        : []),
+      { label: '就醫建議', value: advice },
+      ...redFlags.map((f) => ({ label: '警示信號', value: f, tone: 'warn' as const })),
+      ...(typeof d?.disclaimer === 'string' && d.disclaimer
+        ? [{ label: '免責聲明', value: d.disclaimer }]
+        : []),
+    ],
+  };
+}
+
+/** report_explain 成功 → 報告解讀卡（逐項含義 + 狀態標籤（偏高 / 偏低 /
+ *  異常行警示色高亮，正常行預設灰）+ 整體解讀 / 復診建議；ai 生成標識
+ *  與免責聲明為合規必附行） */
+function buildReportCard(data: unknown): HealthCard | null {
+  const d = data as {
+    mode?: unknown;
+    items?: unknown;
+    summary?: unknown;
+    followUp?: unknown;
+    disclaimer?: unknown;
+  } | undefined;
+  if (d?.mode === 'guard') return buildHealthGuardCard(data);
+  const rawItems = Array.isArray(d?.items) ? (d?.items as unknown[]) : [];
+  const items = rawItems
+    .slice(0, 12)
+    .filter((it): it is Record<string, unknown> => typeof it === 'object' && it !== null)
+    .filter((it) => typeof it.name === 'string' && (it.name as string).trim() && typeof it.meaning === 'string')
+    .map((it) => {
+      const statusKey = typeof it.status === 'string' ? it.status : '';
+      const statusLabel = REPORT_STATUS_LABELS[statusKey] ?? '異常';
+      // 偏高 / 偏低 / 異常行帶警示色；非法狀態映射為異常（與雲端窄化
+      // 同款寧可高亮原則，不掩蓋潛在異常）
+      const tone = statusKey === 'normal' ? undefined : ('warn' as const);
+      return {
+        name: (it.name as string).trim().slice(0, 40),
+        value: typeof it.value === 'string' ? it.value.trim().slice(0, 60) : '',
+        unit: typeof it.unit === 'string' ? it.unit.trim().slice(0, 20) : '',
+        statusLabel,
+        tone,
+        meaning: (it.meaning as string).trim().slice(0, 200),
+      };
+    });
+  const summary = typeof d?.summary === 'string' ? d.summary.trim() : '';
+  if (items.length === 0 && !summary) return null;
+  return {
+    type: 'health',
+    key: `report-${items.length}-${Date.now()}`,
+    title: '化驗 / 體檢報告解讀',
+    subtitle: `${BRAND_AI_GENERATED_BY} AI 生成`,
+    lines: [
+      ...items.map((it) => ({
+        label: `${it.name} · ${it.statusLabel}`,
+        value: `${it.value ? `${it.value}${it.unit} — ` : ''}${it.meaning}`,
+        ...(it.tone ? { tone: it.tone } : {}),
+      })),
+      ...(summary ? [{ label: '整體解讀', value: summary }] : []),
+      ...(typeof d?.followUp === 'string' && d.followUp.trim()
+        ? [{ label: '後續建議', value: d.followUp.trim() }]
+        : []),
+      ...(typeof d?.disclaimer === 'string' && d.disclaimer
+        ? [{ label: '免責聲明', value: d.disclaimer }]
+        : []),
+    ],
+  };
+}
+
+/** med_info 成功 → 藥品通識卡（類別標籤列 + 常見用途 / 注意事項 /
+ *  知識邊界；ai 生成標識與免責聲明為合規必附行） */
+function buildMedCard(data: unknown): HealthCard | null {
+  const d = data as {
+    mode?: unknown;
+    drugName?: unknown;
+    category?: unknown;
+    commonUses?: unknown;
+    keyNotes?: unknown;
+    uncertainty?: unknown;
+    disclaimer?: unknown;
+  } | undefined;
+  if (d?.mode === 'guard') return buildHealthGuardCard(data);
+  const category = typeof d?.category === 'string' ? d.category.trim() : '';
+  if (!category) return null;
+  const commonUses = Array.isArray(d?.commonUses)
+    ? (d?.commonUses as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim() !== '').slice(0, 4)
+    : [];
+  const keyNotes = Array.isArray(d?.keyNotes)
+    ? (d?.keyNotes as unknown[]).filter((s): s is string => typeof s === 'string' && s.trim() !== '').slice(0, 4)
+    : [];
+  const drugName = typeof d?.drugName === 'string' && d.drugName.trim() ? d.drugName.trim().slice(0, 40) : '藥品通識';
+  return {
+    type: 'health',
+    key: `med-${drugName}-${Date.now()}`,
+    title: `藥品通識：${drugName}`,
+    subtitle: `${BRAND_AI_GENERATED_BY} AI 生成`,
+    chips: [category],
+    lines: [
+      ...commonUses.map((u) => ({ label: '常見用途', value: u.slice(0, 100) })),
+      ...keyNotes.map((n) => ({ label: '注意事項', value: n.slice(0, 150) })),
+      ...(typeof d?.uncertainty === 'string' && d.uncertainty.trim()
+        ? [{ label: '知識邊界', value: d.uncertainty.trim() }]
+        : []),
+      ...(typeof d?.disclaimer === 'string' && d.disclaimer
+        ? [{ label: '免責聲明', value: d.disclaimer }]
+        : []),
+    ],
   };
 }
 
@@ -1521,6 +1746,44 @@ function buildWeatherCard(data: unknown): WeatherCard | null {
     ],
     sourceLabel: d.source === 'amap_realtime' ? '高德實時' : '模擬數據',
     sourceReal: d.source === 'amap_realtime',
+  };
+}
+
+/** 週幾標籤（本地時區解讀 YYYY-MM-DD；Date 解析失敗時退回原日期段） */
+const FORECAST_WEEKDAYS = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'] as const;
+
+/** get_forecast 成功 → 預報交付卡（城市 + 每日一行：日期週幾 / 現象 / 溫度區間，
+ *  數據源標籤區分即時 / 模擬；結構不完整時返回 null 走 generic 兜底卡） */
+function buildForecastCard(data: unknown): ForecastCard | null {
+  const d = data as {
+    city?: unknown;
+    days?: unknown;
+    source?: unknown;
+  } | undefined;
+  if (!d || !Array.isArray(d.days) || d.days.length === 0) return null;
+  const rows: ForecastCard['rows'] = [];
+  for (const day of d.days.slice(0, 7)) {
+    if (!day || typeof day !== 'object') continue;
+    const p = day as Record<string, unknown>;
+    if (typeof p.date !== 'string' || !p.date) continue;
+    const dt = new Date(`${p.date}T00:00:00`);
+    const label = Number.isNaN(dt.getTime())
+      ? p.date.slice(5).replace('-', '/')
+      : `${p.date.slice(5).replace('-', '/')} ${FORECAST_WEEKDAYS[dt.getDay()]}`;
+    const wx = typeof p.dayweather === 'string' ? p.dayweather : '';
+    const hi = typeof p.daytemp === 'string' ? p.daytemp : '';
+    const lo = typeof p.nighttemp === 'string' ? p.nighttemp : '';
+    const temp = hi || lo ? ` ${lo}~${hi}°` : '';
+    rows.push({ label, value: `${wx}${temp}`.trim() });
+  }
+  if (rows.length === 0) return null;
+  return {
+    type: 'forecast',
+    key: `forecast-${typeof d.city === 'string' ? d.city : ''}-${rows[0]?.label ?? ''}-${rows.length}`,
+    city: typeof d.city === 'string' && d.city ? d.city : '指定城市',
+    rows,
+    sourceLabel: d.source === 'open-meteo' ? 'Open-Meteo' : '模擬數據',
+    sourceReal: d.source === 'open-meteo',
   };
 }
 
@@ -2603,12 +2866,37 @@ Page({
       return;
     }
 
+    // 健康顧問文本形態特判（2026-10 健康顧問域）：mode:'text' 為雲端結構化
+    // 失敗的降級回覆或端上離線引導文案，以純文本氣泡呈現（與陪伴對話同構）；
+    // reply 冠 ai_generated 標識，雲端攜帶的免責聲明一併附於尾部（合規紅線）。
+    // guard / structured 形態續走下方卡片分支（構造函數內分流）
+    if (task.action === 'symptom_triage' || task.action === 'report_explain' || task.action === 'med_info') {
+      const hd = data as { mode?: unknown; reply?: unknown; disclaimer?: unknown };
+      if (hd.mode === 'text') {
+        const reply = typeof hd.reply === 'string' ? hd.reply.trim() : '';
+        if (!reply) return;
+        const disclaimer =
+          typeof hd.disclaimer === 'string' && hd.disclaimer ? `\n\n—— ${hd.disclaimer}` : '';
+        const text = `${BRAND_AI_GENERATED_BY}\n${reply}${disclaimer}`;
+        logInfo(`助手回覆（健康顧問文本）：${task.action} ${text.slice(0, 80)}`);
+        this.deliveredTaskIds.add(task.id);
+        this.appendMessage({
+          id: this.nextMsgId(),
+          role: 'assistant',
+          content: text,
+          timestamp: Date.now(),
+        });
+        return;
+      }
+    }
+
     let card: AnyCard | null = null;
     if (task.action === 'search_train') card = buildTrainCard(data);
     else if (task.action === 'book_ticket') card = buildTrainOrderCard(data);
     else if (task.action === 'search_flights') card = buildFlightCard(data);
     else if (task.action === 'book_flight') card = buildFlightOrderCard(data);
     else if (task.action === 'get_weather') card = buildWeatherCard(data);
+    else if (task.action === 'get_forecast') card = buildForecastCard(data);
     // 2026-10 六域回補：咖啡 / 購物 / 預約 / 票務 / 支付聚合
     else if (task.action === 'search_store') card = buildStoreCard(data);
     else if (task.action === 'search_poi') card = buildPoiCard(data);
@@ -2642,6 +2930,12 @@ Page({
     // 2026-10-14 飛豬域（skill.travel.fliggy）：酒店搜索 + AI 行程推薦
     else if (task.action === 'search_hotels') card = buildFliggyHotelsCard(data);
     else if (task.action === 'ai_search') card = buildFliggyAiCard(data);
+    // 2026-10 健康顧問域（skill.health.advisor）：分診 / 報告解讀 / 藥品
+    // 通識（mode:'text' 已於上方文本氣泡特判返回，此處 structured / guard
+    // 形態；構造函數內部對 guard 統一轉急症守衛卡）
+    else if (task.action === 'symptom_triage') card = buildTriageCard(data);
+    else if (task.action === 'report_explain') card = buildReportCard(data);
+    else if (task.action === 'med_info') card = buildMedCard(data);
     // 動態技能統一 run action：受控展示協議（display 標題/明細 + AI 標識，
     // 不暴露 raw JSON；display 缺失退化為截斷文字）
     else if (task.action === 'run' && task.skillId.startsWith(DYN_SKILL_PREFIX)) card = buildDynamicDisplayCard(data);

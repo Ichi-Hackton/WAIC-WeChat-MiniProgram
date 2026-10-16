@@ -200,6 +200,24 @@
                 </view>
               </view>
 
+              <!-- 天氣預報交付卡（2026-10-16）：城市 + 每日一行（日期週幾 / 現象 / 溫度區間），
+                   樣式復用實況卡（weather-head / order-line） -->
+              <view wx:elif="{{card.type === 'forecast'}}" class="card-delivery">
+                <view class="weather-head">
+                  <view class="weather-main">
+                    <text class="weather-city">{{card.city}}</text>
+                    <text class="weather-condition">未來 {{card.rows.length}} 天預報</text>
+                  </view>
+                  <view class="source-tag {{card.sourceReal ? 'source-real' : 'source-mock'}}">{{card.sourceLabel}}</view>
+                </view>
+                <view class="order-body">
+                  <view wx:for="{{card.rows}}" wx:for-item="line" wx:key="label" class="order-line">
+                    <text class="order-label">{{line.label}}</text>
+                    <text class="order-value">{{line.value}}</text>
+                  </view>
+                </view>
+              </view>
+
               <!-- 通用兜底交付卡：未知 action 的成功結果（interaction/card-render 渲染） -->
               <view wx:elif="{{card.type === 'generic'}}" class="card-delivery">
                 <view class="order-head">
@@ -209,6 +227,28 @@
                 </view>
                 <view class="order-body">
                   <view wx:for="{{card.lines}}" wx:for-item="line" wx:key="label" class="order-line">
+                    <text class="order-label">{{line.label}}</text>
+                    <text class="order-value">{{line.value}}</text>
+                  </view>
+                </view>
+              </view>
+
+              <!-- 健康顧問交付卡（2026-10 健康顧問域）：緊迫度徽章四檔配色
+                  （紅=立即急診 / 橙=24h 內 / 藍=擇期 / 綠=居家，安全語義
+                  配色）+ 科室 / 類別標籤列 + 行級警示（redFlags 紅框、
+                  異常指標高亮）；guard 形態徽章固定紅檔且不帶 AI 標識 -->
+              <view wx:elif="{{card.type === 'health'}}" class="card-delivery">
+                <view class="order-head">
+                  <text class="order-mark">·</text>
+                  <text class="delivery-title">{{card.title}}</text>
+                  <text wx:if="{{card.subtitle}}" class="product-kw">{{card.subtitle}}</text>
+                </view>
+                <view wx:if="{{card.badge}}" class="health-badge health-badge-{{card.badge.level}}">{{card.badge.text}}</view>
+                <view wx:if="{{card.chips && card.chips.length > 0}}" class="health-chips">
+                  <text wx:for="{{card.chips}}" wx:for-item="chip" wx:key="*this" class="health-chip">{{chip}}</text>
+                </view>
+                <view class="order-body">
+                  <view wx:for="{{card.lines}}" wx:for-item="line" wx:key="label" class="order-line {{line.tone === 'warn' ? 'order-line-warn' : ''}}">
                     <text class="order-label">{{line.label}}</text>
                     <text class="order-value">{{line.value}}</text>
                   </view>
