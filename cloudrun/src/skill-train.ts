@@ -482,11 +482,22 @@ const handleBook: RouteHandler = async (body, ctx) => {
   /*
    * 下單金額優先取真實票價（與查詢展示一致，避免「查價 ¥626 / 下單 ¥553」
    * 的金額不一致）：Tripmatch（優先）或 12306-mcp 可用且 from/to 齊備時，
-   * 查當日車次並精確匹配請求席別。查不到（未配置 / 車次已消失 / 連線失敗 /
-   * 席別不存在）回退靜態價目表。精確匹配不回退其他席別：訂單金額必須
+   * 查當日車次並精確匹配請求席別。精確匹配不回退其他席別：訂單金額必須
    * 對應用戶確認的席別，不可「就近取」。
+   *
+   * 席別可售性攔截（2026-10-16 黑盒測試 D2 修訂）：查到目標車次但無請求
+   * 席別時（如 G531 無二等座）不再靜默回退靜態價（黑盒實測：靜態二等座
+   * 基準價恰與另一車次真實價相同，用戶拿到誤導性需求卡，跳轉 12306 後
+   * 該席別根本不可買），改為業務失敗 1001 並列出可售席別，引導換席別 /
+   * 車次（與票務域「場次不可售 1001」同構，LLM 重規劃可消費）。
+   *
+   * 靜態基準價明示：未配置即時數據源 / 連線失敗 / 未查到車次（可能已
+   * 售罄下架，跳轉 12306 仍有意義）時回退靜態價目表，但 copyText 金額
+   * 行標注「基準價」，不再以即時價口徑展示。
    */
+  const seatLabel = SEAT_TYPE_LABEL[input.seatType] ?? input.seatType;
   let amountCent = SEAT_PRICE_CENT[input.seatType] ?? SEAT_PRICE_CENT.second_class;
+  let priceIsBaseline = true; // 未取得即時票價（回退靜態價時明示基準價口徑）
   const vfBookKey = process.env.VARIFLIGHT_API_KEY;
   const mcpUrl = process.env.MCP_12306_URL;
   if (vfBookKey && input.from && input.to) {
@@ -498,16 +509,23 @@ const handleBook: RouteHandler = async (body, ctx) => {
       });
       const target = raw.find((t) => t.trainNumber === input.trainNo);
       const names = SEAT_TYPE_TO_NAMES[input.seatType as string] ?? SEAT_TYPE_TO_NAMES.second_class;
-      const hit = (target?.seatLists ?? []).find((s) => names.includes(s.seatName ?? ''));
-      if (hit && typeof hit.seatPrice === 'number' && hit.seatPrice > 0) {
-        amountCent = Math.round(hit.seatPrice * 100);
+      if (target) {
+        const seatLists = target.seatLists ?? [];
+        const hit = seatLists.find((s) => names.includes(s.seatName ?? ''));
+        if (hit && typeof hit.seatPrice === 'number' && hit.seatPrice > 0) {
+          amountCent = Math.round(hit.seatPrice * 100);
+          priceIsBaseline = false;
+        } else {
+          // 查到車次但無該席別：可售性攔截（而非靜默回退靜態價）
+          const avail = seatLists.map((s) => s.seatName ?? '').filter(Boolean).join('、');
+          return fail(1001, `車次 ${input.trainNo} 當日無${seatLabel}可售${avail ? `（可售席別：${avail}）` : ''}，請更換席別或車次`);
+        }
       }
     } catch (e) {
       console.error('[skill-train] 下單真實票價查詢（Tripmatch）失敗，回落 12306-mcp / 靜態價目表：', e instanceof Error ? e.message : e);
     }
   }
-  if (amountCent === (SEAT_PRICE_CENT[input.seatType] ?? SEAT_PRICE_CENT.second_class)
-    && mcpUrl && input.from && input.to) {
+  if (priceIsBaseline && mcpUrl && input.from && input.to) {
     try {
       const text = await callMcpTool(mcpUrl, 'get-tickets', {
         date: input.date as string,
@@ -520,9 +538,16 @@ const handleBook: RouteHandler = async (body, ctx) => {
       if (Array.isArray(parsed)) {
         const target = (parsed as McpTicket[]).find((t) => t.start_train_code === input.trainNo);
         const names = SEAT_TYPE_TO_NAMES[input.seatType as string] ?? SEAT_TYPE_TO_NAMES.second_class;
-        const hit = (target?.prices ?? []).find((p) => names.includes(p.seat_name ?? ''));
-        if (hit && typeof hit.price === 'number' && hit.price > 0) {
-          amountCent = Math.round(hit.price * 100);
+        if (target) {
+          const prices = target.prices ?? [];
+          const hit = prices.find((p) => names.includes(p.seat_name ?? ''));
+          if (hit && typeof hit.price === 'number' && hit.price > 0) {
+            amountCent = Math.round(hit.price * 100);
+            priceIsBaseline = false;
+          } else {
+            const avail = prices.map((p) => p.seat_name ?? '').filter(Boolean).join('、');
+            return fail(1001, `車次 ${input.trainNo} 當日無${seatLabel}可售${avail ? `（可售席別：${avail}）` : ''}，請更換席別或車次`);
+          }
         }
       }
     } catch (e) {
@@ -536,11 +561,10 @@ const handleBook: RouteHandler = async (body, ctx) => {
    * 展示，實際以 12306 下單頁為準。
    */
   const orderId = `trn_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-  const seatLabel = SEAT_TYPE_LABEL[input.seatType] ?? input.seatType;
   const copyText = [
     `車次 ${input.trainNo}（${input.date}）`,
     `${input.from ?? ''} → ${input.to ?? ''}`,
-    `${seatLabel} ¥${(amountCent / 100).toFixed(2)}`,
+    `${seatLabel} ¥${(amountCent / 100).toFixed(2)}${priceIsBaseline ? '（基準價，實際以 12306 下單頁為準）' : ''}`,
     `乘車人 ${input.passengerName}`,
   ].join('\n');
   await createOrder({

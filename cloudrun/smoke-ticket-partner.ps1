@@ -56,7 +56,8 @@ try {
   '--- 3. create_order ev_d101 x2：下單前雲端經渠道再核實，金額 = 680 元 x2 ---'
   $s3 = Send-Json "$serverUrl/api/skill/skill.ticket.show/create_order" $ownerHeaders ('{{"eventId":"ev_d101","sessionId":"{0}","tierId":"{1}","quantity":2,"viewerName":"渠道測試","viewerIdNo":"110101199001011234"}}' -f $firstSession, $firstTier)
   $s3 | ConvertTo-Json -Depth 8 -Compress
-  Check '渠道演出下單成功（amountCent=136000）' ($s3.code -eq 0 -and $s3.data.amountCent -eq 136000 -and $s3.data.status -eq 'pending_payment') $s3
+  # 2026-10-16 修訂：跳轉模式下票務訂單狀態為 pending_external（真實購票在渠道側收銀台完成）
+  Check '渠道演出下單成功（amountCent=136000 / pending_external）' ($s3.code -eq 0 -and $s3.data.amountCent -eq 136000 -and $s3.data.status -eq 'pending_external') $s3
 
   '--- 4. search_events「周杰倫」：渠道無此演出（404→空），演示目錄兜底聚合 ev_001 ---'
   $s4 = Send-Json "$serverUrl/api/skill/skill.ticket.show/search_events" $null '{"keyword":"周杰倫"}'
