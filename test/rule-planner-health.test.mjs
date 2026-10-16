@@ -183,3 +183,29 @@ test('「預約掛號」無症狀詞不再疊加空分診任務（2026-10-16 審
   const r2 = rulePlan('預約明天門診，我發燒了', buildCtx());
   assert.ok(r2.tasks.some((t) => t.action === 'symptom_triage'));
 });
+
+test('「最近」時間副詞不劫持地圖域（2026-10-16 實測 badcase）', () => {
+  // 原句復現：「我最近心里不得劲」曾被裸「最近」劫持為
+  // search_poi「搜尋深圳附近的心里不得劲」，應進諮詢域陪伴對話
+  const r = rulePlan('我最近心里不得劲', buildCtx());
+  assert.equal(r.tasks.length, 1, `實際任務：${JSON.stringify(r.tasks)}`);
+  assert.equal(r.tasks[0].skillId, 'skill.mind.counseling');
+  assert.equal(r.tasks[0].action, 'chat_companion');
+  // 繁體對照（詞表簡繁並列慣例）
+  const r2 = rulePlan('我最近心裡不得勁', buildCtx());
+  assert.equal(r2.tasks[0].action, 'chat_companion');
+  // 同款隱患：時間副詞 + 症狀詞不應疊加幽靈 POI 任務
+  const r3 = rulePlan('我最近有些咳嗽', buildCtx());
+  const actions3 = r3.tasks.map((t) => t.action);
+  assert.ok(!actions3.includes('search_poi'), `實際任務：${actions3.join(', ')}`);
+  assert.ok(actions3.includes('symptom_triage'));
+});
+
+test('「最近的」空間指代仍通地圖域（消歧收窄回歸）', () => {
+  // 對照組：帶「的」的空間指代（nearest）不受「最近」消歧影響
+  const r = rulePlan('最近的便利店在哪', buildCtx());
+  assert.equal(r.tasks.length, 1);
+  assert.equal(r.tasks[0].skillId, 'skill.map.tianditu');
+  assert.equal(r.tasks[0].action, 'search_poi');
+  assert.equal(r.tasks[0].input.keyword, '便利店');
+});

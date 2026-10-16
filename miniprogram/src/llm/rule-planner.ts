@@ -724,7 +724,7 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   // 諮詢域（兜底對話）：情緒 / 陪聊詞——僅在無任何任務域命中時展開
   // （「煩死了幫我訂杯咖啡」應訂咖啡而非陪聊，見末尾 tasks.length === 0 分支）
   const wantsCounseling =
-    /心情|難過|难过|傷心|伤心|焦慮|焦虑|壓[力大]|压[力大]|孤單|孤单|寂寞|[鬱郁][悶闷]|煩|烦|陪我|聊[一]?聊|說說話|说说话|傾訴|倾诉|開心不起來|开心不起来/.test(intent);
+    /心情|難過|难过|傷心|伤心|焦慮|焦虑|壓[力大]|压[力大]|孤單|孤单|寂寞|[鬱郁][悶闷]|煩|烦|不得[劲勁]儿?|陪我|聊[一]?聊|說說話|说说话|傾訴|倾诉|開心不起來|开心不起来/.test(intent);
   // 醫療健康域（2026-10 健康顧問 skill.health.advisor）：報告解讀 / 藥品
   // 通識 / 症狀分診三詞族，按「最具體優先」互斥分流——報告 > 藥品 > 分診
   // （伴隨症狀詞的用藥疑問歸分診：advice 自帶遵醫囑引導，不拆雙任務）。
@@ -776,9 +776,15 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   // 附近地點搜尋域：POI 查詢（便利店 / 藥店 / 列印店…）。「附近 + 專屬域詞」
   // 的組合歸各專屬域（「附近星巴克」歸咖啡域、「附近賣場」歸購物域），
   // 此處以各域旗標排他，僅承接無專屬 SKILL 的品類詞；wantsTrain / wantsFlight
-  // 亦排他（「附近的高鐵站」實際語義偏車次查詢域，MVP 不搶接）
+  // 亦排他（「附近的高鐵站」實際語義偏車次查詢域，MVP 不搶接）。
+  // 「最近」歧義消解（2026-10-16 實測 badcase：「我最近心里不得劲」被裸
+  // 「最近」劫持為 search_poi「心里不得劲」）：時間副詞「最近」（recently）
+  // 與空間指代「最近的」（nearest，後接品類詞）同形，POI 語義僅認帶「的」
+  // 的指代用法；「最近想去哪」類時間表述透傳 LLM 主鏈路。
+  // 「我最近有些咳嗽」同款隱患一併根治（此前靠後續分支僥倖不炸）。
+  // extractNearbyKeyword 的 m1「的」可選不需同步收緊——此處閘門已擋住
   const wantsNearby =
-    /附近|周[邊边]|最近|哪[裡里]有|有[没沒]有/.test(intent) &&
+    /附近|周[邊边]|最近的|哪[裡里]有|有[没沒]有/.test(intent) &&
     !wantsCoffee &&
     !wantsMcd &&
     !wantsLuckin &&
