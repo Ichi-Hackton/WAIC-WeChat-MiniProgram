@@ -46,10 +46,13 @@ export function buildPlannerPrompt(input: PlannerPromptInput): Array<{
   role: 'system' | 'user';
   content: string;
 }> {
-  // 預算上限：雲端 llm-chat.ts 單條消息 MAX_MESSAGE_CHARS=16000，超限即
-  // 確定性 400（不可重試）→ LLM 規劃永久降級規則規劃器（2026-10-16 缺陷）。
-  // 預留 ~800 字元給訊息包裝與模板增長，超過即逐級降載（見下方階梯）。
-  const BUDGET_CHARS = 15_200;
+  // 預算上限：雲端 llm-chat.ts 單條消息 MAX_MESSAGE_CHARS=24000（2026-10-16
+  // 上調，原 16000），超限即確定性 400（不可重試）→ LLM 規劃永久降級規則
+  // 規劃器（2026-10-16 缺陷）。預留 ~2000 字元給訊息包裝、模板增長與後續
+  // 技能擴容（16 技能 slim 表實測 15471 字元，曾令原 15200 預算被技能表
+  // 自身擊穿——常規會話必降載，deviceComm 被截尾踢出、最近對話全滅）。
+  // 超過即逐級降載（見下方階梯）。
+  const BUDGET_CHARS = 22_000;
 
   // 重規劃段落（僅附帶失敗上下文時注入）：置於用戶意圖之後——LLM 先讀
   // 原意圖再讀失敗背景，調整方向不脫離原目標。不參與降載（失敗背景是
@@ -89,7 +92,8 @@ export function buildPlannerPrompt(input: PlannerPromptInput): Array<{
 
   // 降載階梯（犧牲價值由低到高）：最近對話 6→2→0 條 → 撤動態技能（增強
   // 能力，優先於內置技能犧牲）→ 逐條截斷技能表尾 → 硬截兜底（意圖本身
-  // 超長的極端場景，截斷勝於整體 400）。常規會話（實測 ~13.9K）零降載直達
+  // 超長的極端場景，截斷勝於整體 400）。常規會話（16 技能 + 6 條對話，
+  // 2026-10-16 實測 ~16.9K）零降載直達；注意：截尾固定犧牲註冊序末位技能
   let skills = input.availableSkills;
   let maxMsgs = 6;
   let userContent = assemble(skills, maxMsgs);
