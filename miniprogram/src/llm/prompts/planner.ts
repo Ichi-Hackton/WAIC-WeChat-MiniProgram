@@ -156,17 +156,40 @@ function buildContextString(ctx: AgentContext, maxRecentMsgs = 6): string {
     );
   }
 
+  // 當前城市權威行（2026-10-16 新增；get_forecast 天氣預報的城市取值依據）：
+  // 與出發城市刻意分離——預報語義是「我現在在哪」，定位城市優先，地址簿
+  // 家城市不壓制（badcase：人在澳門、家在廣州，預報錯查廣州）
+  const curCity = ctx.userProfile.location?.currentCity;
+  if (curCity) {
+    lines.push(
+      `- 當前城市：${curCity}（定位所得）——get_forecast（天氣預報）的 city 在用戶未點名城市時直接取此值，嚴禁改用「出發城市」行代替`,
+    );
+  } else {
+    const homeCity = ctx.userProfile.homeAddress?.city;
+    const opt = homeCity ? `，家地址城市「${homeCity}」可作選項` : '';
+    lines.push(
+      `- 當前城市：未知（定位不可用或城市解析失敗）——get_forecast 缺城市時回空 tasks 追問（提示開啟定位或說出城市名${opt}），嚴禁以「出發城市」行代替或猜測`,
+    );
+  }
+
   if (ctx.userProfile.location) {
-    // city 由定位 + 雲端逆地理補全（services/geo.ts），可能缺失；座標為
-    // 可選增強（定位失敗時缺失）。城市缺失時告誡 LLM 勿由座標臆測城市
-    const { city, lat, lng } = ctx.userProfile.location;
+    // 位置行只反映定位事實（當前城市 / 座標）——地址簿家城市屬「出發城市」
+    // 行語義，混入此行會在「人在澳門、家在廣州」時自相矛盾（城市與座標對不上）
+    const { currentCity, lat, lng } = ctx.userProfile.location;
     const hasCoord = lat !== undefined && lng !== undefined;
-    if (city && hasCoord) {
-      lines.push(`- 用戶位置：${city} (${lat}, ${lng})（定位已授權）`);
-    } else if (city) {
-      lines.push(`- 用戶位置：${city}（有城市無座標——需座標的任務（如天氣）應向用戶確認定位）`);
+    if (currentCity && hasCoord) {
+      lines.push(`- 用戶位置：${currentCity} (${lat}, ${lng})（定位已授權）`);
+    } else if (currentCity) {
+      lines.push(`- 用戶位置：${currentCity}（定位已授權）`);
     } else if (hasCoord) {
       lines.push(`- 用戶位置：城市未知（座標 ${lat}, ${lng}，定位已授權）——任務參數需要城市時應向用戶確認，勿由座標臆測`);
+    } else {
+      // 定位不可用（未授權 / 失敗 / 未嘗試）而地址簿給過出發城市：location
+      // 為真值會遮蔽下方 denied / error 引導行——需座標任務的提示在此還原
+      // （2026-10-16 審計 Low-2）
+      const auth = ctx.userProfile.locationAuth;
+      const why = auth === 'denied' ? '未授權' : auth === 'error' ? '定位失敗' : '定位未嘗試';
+      lines.push(`- 用戶位置：定位不可用（${why}），僅有地址簿出發城市——需座標的任務（如 get_weather）應引導開啟定位或改用具名城市查詢（get_forecast）`);
     }
   } else if (ctx.userProfile.locationAuth === 'denied') {
     lines.push('- 用戶位置：定位已被拒絕授權——需座標的任務（如天氣）應回覆引導用戶到小程序設置開啟定位授權，勿假設可獲取座標');

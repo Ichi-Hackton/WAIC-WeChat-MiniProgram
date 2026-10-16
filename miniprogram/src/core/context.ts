@@ -103,6 +103,10 @@ function fetchCoord(): Promise<CoordOk | CoordFail | undefined> {
  * 座標仍僅來自定位（地址簿無座標）；授權狀態（auth）只反映定位事實，
  * 不被地址簿覆蓋——地址簿可提供城市但天氣等座標依賴能力仍需定位。
  *
+ * currentCity（2026-10-16 新增）：與出發城市分離的「當前城市」——僅由
+ * 定位鏈（原生 city / 逆地理）供給，永不回退地址簿；「我現在在哪」語義
+ * （天氣預報等）消費此值，避免「人在澳門、家在廣州，預報錯查廣州」。
+ *
  * 授權狀態：定位未授權 / 失敗不再以「location 缺失」一言蔽之——
  * auth 區分「拒絕授權（denied）」與「定位失敗（error）」，供閒聊分類器
  * 如實回答「能不能獲取我的位置」。未嘗試定位（無 wx 環境）時
@@ -138,6 +142,7 @@ async function fetchLocation(
         lat: coord.lat,
         lng: coord.lng,
         ...(city ? { city, citySource: addrCityNorm ? 'address_book' : 'native' } : {}),
+        ...(geoCity ? { currentCity: geoCity } : {}),
       },
       auth: 'granted' as const,
     };
@@ -150,6 +155,8 @@ async function fetchLocation(
       lat: coord.lat,
       lng: coord.lng,
       ...(city ? { city, citySource: addrCityNorm ? 'address_book' : 'geocode' } : {}),
+      // 當前城市：僅定位鏈供給（此處即逆地理結果），地址簿有值也不覆蓋
+      ...(geoCity ? { currentCity: geoCity } : {}),
     },
     auth: 'granted' as const,
   };

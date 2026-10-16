@@ -28,7 +28,7 @@ function makeCtx(over = {}) {
     sessionId: 'test-session',
     userId: 'u1',
     userProfile: {
-      location: { lat: 31.23, lng: 121.47, city: '上海' },
+      location: { lat: 31.23, lng: 121.47, city: '上海', currentCity: '上海' },
       locationAuth: 'granted',
       preferences: {},
       history: [],
@@ -106,6 +106,13 @@ check('高鐵訂票語義 → search_train + book_ticket',
 a = actions('查上海天氣');
 check('天氣意圖 → get_weather', a.includes('skill.weather.query:get_weather'), a.join(' | '));
 
+{
+  const plan = rulePlan('未來七天的天氣', makeCtx());
+  const t = (plan.tasks ?? [])[0];
+  check('預報「未來七天天氣」→ get_forecast，城市取定位 currentCity（非地址簿出發城市）',
+    t?.action === 'get_forecast' && t?.input?.city === '上海', JSON.stringify(t?.input));
+}
+
 // --- 危機短路（優先於一切業務域，含支付）---
 {
   const plan = rulePlan('我不想活了', makeCtx());
@@ -148,7 +155,7 @@ check('簡體「音乐剧」命中票務域（正則與 understand() 詞表同�
 // --- 行程複合意圖 ---
 {
   const beijingCtx = makeCtx();
-  beijingCtx.userProfile.location = { lat: 39.9, lng: 116.4, city: '北京' };
+  beijingCtx.userProfile.location = { lat: 39.9, lng: 116.4, city: '北京', currentCity: '北京' };
   a = actions('周六去上海看球賽', beijingCtx);
   check('行程（北京定位）「周六去上海看球賽」→ 多任務 DAG（交通 + 演出搜尋）',
     a.includes('skill.train.12306:search_train') && a.includes('skill.ticket.show:search_events'), a.join(' | '));

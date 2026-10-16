@@ -25,13 +25,14 @@ async function load(rel) {
 
 const { rulePlan } = await load('llm/rule-planner.js');
 
-/** 最小 AgentContext（規劃層僅讀 userProfile.location / locationAuth 等） */
+/** 最小 AgentContext（規劃層僅讀 userProfile.location / locationAuth 等；
+ *  currentCity 模擬定位逆地理成功——「我現在在哪」的城市供給） */
 function buildCtx(overrides = {}) {
   return {
     sessionId: 'test-session',
     userId: 'test-user',
     userProfile: {
-      location: { lat: 22.5431, lng: 114.0579, city: '深圳' },
+      location: { lat: 22.5431, lng: 114.0579, city: '深圳', currentCity: '深圳' },
       locationAuth: 'authorized',
       preferences: {},
       history: [],
@@ -133,6 +134,44 @@ test('「未來 N 天」無天氣詞不劫持預報域（2026-10-16 審計 M1 �
   const r2 = rulePlan('未來兩天的天氣', buildCtx());
   assert.equal(r2.tasks[0].action, 'get_forecast');
   assert.equal(r2.tasks[0].input.days, 2);
+});
+
+test('預報城市：定位所得 currentCity 優先於地址簿出發城市（2026-10-16 修訂）', () => {
+  // badcase 復現：人在澳門（定位）、家在廣州（地址簿默認地址），
+  // 預報應查澳門而非廣州（「我現在在哪」語義不受出發城市壓制）
+  const ctx = buildCtx({
+    userProfile: {
+      location: {
+        lat: 22.19875, lng: 113.54913,
+        city: '广州', citySource: 'address_book', currentCity: '澳门',
+      },
+      homeAddress: { city: '广州', full: '廣東省廣州市天河區XX路1號' },
+    },
+  });
+  const r = rulePlan('未來七天的天氣如何', ctx);
+  assert.equal(r.tasks[0].action, 'get_forecast');
+  assert.equal(r.tasks[0].input.city, '澳门');
+});
+
+test('預報無當前城市：追問文案給出家地址城市選項（隨機應變）', () => {
+  // 定位成功但逆地理未出城市（currentCity 缺失），地址簿僅供出發城市：
+  // 不靜默回退廣州，而是追問並把家地址城市作顯式選項
+  const ctx = buildCtx({
+    userProfile: {
+      location: { lat: 22.19875, lng: 113.54913, city: '广州', citySource: 'address_book' },
+      homeAddress: { city: '广州', full: '廣東省廣州市天河區XX路1號' },
+    },
+  });
+  const r = rulePlan('未來七天的天氣如何', ctx);
+  assert.equal(r.tasks.length, 0);
+  assert.ok(r.message.includes('广州'), `追問文案應含家地址城市：${r.message}`);
+});
+
+test('預報無當前城市且無家地址：追問引導說城市名', () => {
+  const ctx = buildCtx({ userProfile: { location: {} } });
+  const r = rulePlan('查天氣預報', ctx);
+  assert.equal(r.tasks.length, 0);
+  assert.ok(r.message.includes('城市'), r.message);
 });
 
 test('「預約掛號」無症狀詞不再疊加空分診任務（2026-10-16 審計 L1 回歸）', () => {

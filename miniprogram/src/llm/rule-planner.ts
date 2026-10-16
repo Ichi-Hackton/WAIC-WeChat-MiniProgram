@@ -71,6 +71,22 @@ const DEPARTURE_CITY_PROMPT =
   '請問從哪座城市出發？你也可以在「我的」頁填寫常用地址，或開啟定位授權，之後我會自動帶入出發城市。';
 
 /**
+ * 預報城市追問文案（2026-10-16 隨機應變）：定位不可用 / 當前城市解析失敗時，
+ * 按授權狀態與家地址有無分流——被拒授權引導開啟定位，其餘提示稍後重試；
+ * 家地址城市（地址簿默認地址）作為顯式選項給出，用戶一句「用 XX 查」即達成
+ */
+function forecastCityPrompt(ctx: AgentContext): string {
+  const homeCity = ctx.userProfile.homeAddress?.city;
+  const denied = ctx.userProfile.locationAuth === 'denied';
+  const head = denied ? '定位授權未開啟，取不到你所在的城市。' : '暫時取不到你的當前城市。';
+  const action = denied ? '可到小程序設置開啟定位授權後再問我' : '可稍後重試定位';
+  const ask = homeCity
+    ? `或直接告訴我想查哪座城市（說「用${homeCity}查」即用你的默認收貨地址城市）`
+    : '或直接告訴我想查哪座城市（如「澳門未來七天天氣」）';
+  return `${head}${action}；${ask}。`;
+}
+
+/**
  * 從意圖抽取日期：優先取 YYYY-MM-DD 字面值（與 LLM 規劃路徑規則 10 對齊，
  * 快捷預訂指令攜帶具體日期），其次相對詞（今天 / 明天 / 後天），缺省今天
  */
@@ -1254,10 +1270,13 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
   // 其餘失敗 → 稍後重試），見末尾分支
   const weatherLoc = ctx.userProfile.location;
   if (wantsForecast) {
-    // 城市取值鏈：意圖命中演示城市表（extractCity，規範名）→ 當前定位
-    // 城市；兩者皆無且無其他域任務時追問（雲端預報支援任意城市名，
-    // 但規則式無從提取時不猜測；已有任務時靜默跳過，不否決整個 Plan）
-    const forecastCity = extractCity(intent)?.name ?? weatherLoc?.city;
+    // 城市取值鏈（2026-10-16 修訂）：意圖命中演示城市表（extractCity，規範名）
+    // → 當前定位城市（currentCity，逆地理所得）——地址簿出發城市
+    // （location.city）刻意不參與：預報語義是「我現在在哪」，用家城市會出
+    // 「人在澳門、家在廣州，預報錯查廣州」badcase。兩者皆無且無其他域任務時
+    // 隨機應變追問（按授權狀態引導開定位 / 重試，家地址城市作顯式選項）；
+    // 已有任務時靜默跳過，不否決整個 Plan
+    const forecastCity = extractCity(intent)?.name ?? weatherLoc?.currentCity;
     if (forecastCity) {
       tasks.push({
         skillId: 'skill.weather.query',
@@ -1270,17 +1289,21 @@ export function rulePlan(intent: string, ctx: AgentContext): PlannerLLMOutput {
     } else if (tasks.length === 0) {
       return {
         tasks: [],
-        message: '請告訴我想查哪個城市的天氣預報（如「澳門未來七天天氣」）。',
+        message: forecastCityPrompt(ctx),
       };
     }
   } else if (wantsWeather && weatherLoc?.lat !== undefined && weatherLoc?.lng !== undefined) {
+    // 實況展示標籤（2026-10-16 審計 Low-1）：與預報同語義——入參座標永遠是
+    // 定位所得，currentCity 缺失時用通用文案，不借用地址簿出發城市
+    // （否則「人在澳門、家在廣州」時標籤錯標廣州，與實際座標對不上）
+    const liveCity = weatherLoc.currentCity;
     tasks.push({
       skillId: 'skill.weather.query',
       action: 'get_weather',
       input: { lat: weatherLoc.lat, lng: weatherLoc.lng },
       inputBindings: {},
       dependsOn: [],
-      summary: weatherLoc.city ? `查詢${weatherLoc.city}實時天氣` : '查詢當前位置實時天氣',
+      summary: liveCity ? `查詢${liveCity}實時天氣` : '查詢當前位置實時天氣',
     });
   }
 

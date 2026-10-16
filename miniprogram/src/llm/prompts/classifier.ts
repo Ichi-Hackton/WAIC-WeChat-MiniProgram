@@ -60,7 +60,9 @@ function buildClassifierContext(ctx: AgentContext): string {
   const { location, locationAuth } = ctx.userProfile;
   const hasCoord = location?.lat !== undefined && location?.lng !== undefined;
   if (locationAuth === 'granted' && hasCoord) {
-    lines.push(`- 定位：已授權${location?.city ? `，當前城市 ${location.city}` : '（城市暫未解析）'}`);
+    // 「當前城市」只取定位所得（currentCity）——地址簿家城市是「出發城市」
+    // 語義，混入會令閒聊回答「你在 XX」與實際位置不符
+    lines.push(`- 定位：已授權${location?.currentCity ? `，當前城市 ${location.currentCity}` : '（城市暫未解析）'}`);
   } else if (locationAuth === 'denied') {
     lines.push('- 定位：用戶已拒絕授權（回答位置類問題時如實告知，並引導到設置開啟）');
   } else if (locationAuth === 'error') {

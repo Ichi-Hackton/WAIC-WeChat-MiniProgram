@@ -19,6 +19,11 @@ export interface UserLocation {
   city?: string;
   /** 城市來源（出發城市優先級的能見度：地址簿 > 定位） */
   citySource?: 'address_book' | 'geocode' | 'native';
+  /** 當前城市（2026-10-16 新增）：定位所得城市（原生 city / 雲端逆地理），
+   *  與地址簿無關——「我現在在哪」語義（天氣預報 get_forecast、實況展示
+   *  標籤等）取此值，不受出發城市（地址簿優先）壓制；定位不可用或城市
+   *  解析失敗時缺失，消費方此時追問用戶而非靜默回退地址簿 */
+  currentCity?: string;
 }
 
 /** 定位授權狀態（context 構建時由 fetchLocation 寫入；區分「拒絕授權」與「定位失敗」） */
