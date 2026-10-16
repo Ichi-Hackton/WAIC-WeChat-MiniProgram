@@ -154,8 +154,14 @@ export interface SkillMetaSlim {
   capabilities: Array<{
     action: string;
     description: string;
-    inputSchema: JSONSchema;
-    outputSchema: JSONSchema;
+    /**
+     * 入參緊湊摘要（如 "from: string(必填，出發城市); date: string(可選)"），
+     * 替代完整 JSON Schema——完整 schema 隨 SKILL 增至 15 個後縮進序列化
+     * 可達 60KB+，撞爆雲端 llm-chat 單條消息 16000 字元上限，令 LLM 規劃
+     * 永久 400 降級規則規劃器（2026-10-16 實測暴露）；outputSchema 對
+     * 規劃期無價值，一併丟棄。執行期入參校驗仍以完整 schema 為準。
+     */
+    params: string;
     requiresHumanConfirm: boolean;
   }>;
 }

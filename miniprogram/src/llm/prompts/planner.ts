@@ -12,6 +12,7 @@
 
 import type { SkillMetaSlim } from '../../types/skill';
 import type { AgentContext } from '../../types/context';
+import { warn as logWarn } from '../../utils/logger';
 import { extractPassenger } from '../../utils/passenger';
 import { extractTripSlots } from '../../utils/trip';
 import { PREFERENCE_DOMAINS } from '../../storage/preferences';
@@ -45,10 +46,14 @@ export function buildPlannerPrompt(input: PlannerPromptInput): Array<{
   role: 'system' | 'user';
   content: string;
 }> {
-  const skillsJson = JSON.stringify(input.availableSkills, null, 2);
-  const contextStr = buildContextString(input.ctx);
+  // 預算上限：雲端 llm-chat.ts 單條消息 MAX_MESSAGE_CHARS=16000，超限即
+  // 確定性 400（不可重試）→ LLM 規劃永久降級規則規劃器（2026-10-16 缺陷）。
+  // 預留 ~800 字元給訊息包裝與模板增長，超過即逐級降載（見下方階梯）。
+  const BUDGET_CHARS = 15_200;
+
   // 重規劃段落（僅附帶失敗上下文時注入）：置於用戶意圖之後——LLM 先讀
-  // 原意圖再讀失敗背景，調整方向不脫離原目標
+  // 原意圖再讀失敗背景，調整方向不脫離原目標。不參與降載（失敗背景是
+  // 重規劃的關鍵依據，裁剪會令替代路徑規劃失焦）
   const replanSection = input.failedContext
     ? [
         `## 上一輪方案執行失敗（本輪為重規劃，請調整路徑）`,
@@ -59,6 +64,60 @@ export function buildPlannerPrompt(input: PlannerPromptInput): Array<{
         ``,
       ]
     : [];
+
+  // 組裝 user 正文（各預算檔位共用；緊湊序列化——縮進排版對 LLM 無增益，
+  // 帶縮進可多佔 ~30% 字元，是撞爆上限的常量之一）
+  const assemble = (skills: SkillMetaSlim[], maxRecentMsgs: number): string => {
+    const skillsJson = JSON.stringify(skills);
+    const contextStr = buildContextString(input.ctx, maxRecentMsgs);
+    return [
+      `## 用戶意圖`,
+      `> ${input.userIntent}`,
+      ``,
+      ...replanSection,
+      `## 上下文`,
+      contextStr,
+      ``,
+      `## 可用 SKILL 簡表`,
+      '```json',
+      skillsJson,
+      '```',
+      ``,
+      `請輸出 JSON 計劃（嚴格遵守下方 schema，不要任何多餘文字）：`,
+    ].join('\n');
+  };
+
+  // 降載階梯（犧牲價值由低到高）：最近對話 6→2→0 條 → 撤動態技能（增強
+  // 能力，優先於內置技能犧牲）→ 逐條截斷技能表尾 → 硬截兜底（意圖本身
+  // 超長的極端場景，截斷勝於整體 400）。常規會話（實測 ~13.9K）零降載直達
+  let skills = input.availableSkills;
+  let maxMsgs = 6;
+  let userContent = assemble(skills, maxMsgs);
+  const degraded = userContent.length > BUDGET_CHARS;
+  for (const step of [2, 0] as const) {
+    if (userContent.length <= BUDGET_CHARS) break;
+    maxMsgs = step;
+    userContent = assemble(skills, maxMsgs);
+  }
+  if (userContent.length > BUDGET_CHARS) {
+    const builtinOnly = skills.filter((s) => !s.id.startsWith('skill.dynamic.'));
+    if (builtinOnly.length < skills.length) {
+      skills = builtinOnly;
+      userContent = assemble(skills, maxMsgs);
+    }
+  }
+  while (userContent.length > BUDGET_CHARS && skills.length > 1) {
+    skills = skills.slice(0, -1);
+    userContent = assemble(skills, maxMsgs);
+  }
+  if (userContent.length > BUDGET_CHARS) {
+    userContent = userContent.slice(0, BUDGET_CHARS);
+  }
+  if (degraded) {
+    logWarn(
+      `規劃 prompt 超預算已降載（${userContent.length} 字元，保留 ${skills.length} 個 SKILL、最近對話 ${maxMsgs} 條）`,
+    );
+  }
   return [
     {
       role: 'system',
@@ -66,27 +125,13 @@ export function buildPlannerPrompt(input: PlannerPromptInput): Array<{
     },
     {
       role: 'user',
-      content: [
-        `## 用戶意圖`,
-        `> ${input.userIntent}`,
-        ``,
-        ...replanSection,
-        `## 上下文`,
-        contextStr,
-        ``,
-        `## 可用 SKILL 簡表`,
-        '```json',
-        skillsJson,
-        '```',
-        ``,
-        `請輸出 JSON 計劃（嚴格遵守下方 schema，不要任何多餘文字）：`,
-      ].join('\n'),
+      content: userContent,
     },
   ];
 }
 
-/** 構造上下文摘要字串 */
-function buildContextString(ctx: AgentContext): string {
+/** 構造上下文摘要字串（maxRecentMsgs：最近對話保留條數，降載階梯用） */
+function buildContextString(ctx: AgentContext, maxRecentMsgs = 6): string {
   const lines: string[] = [];
   lines.push(`- 會話 ID：${ctx.sessionId}`);
   lines.push(`- 用戶 ID：${ctx.userId}`);
@@ -172,8 +217,11 @@ function buildContextString(ctx: AgentContext): string {
     lines.push(`- 已收集行程要素：${parts.join('、')}（規劃行程時僅追問缺失要素）`);
   }
   // 最近對話（含 assistant 摘要）：多輪場景的參數延續依賴（如「訂 G531」
-  // 沿用上一輪查詢的日期）。僅取尾部數條且截斷，控制 token 消耗
-  const recentMsgs = ctx.messages.filter((m) => m.role === 'user' || m.role === 'assistant').slice(-6);
+  // 沿用上一輪查詢的日期）。僅取尾部數條且截斷，控制 token 消耗。
+  // maxRecentMsgs 由 buildPlannerPrompt 降載階梯控制（超預算時 6→2→0）
+  const recentMsgs = maxRecentMsgs > 0
+    ? ctx.messages.filter((m) => m.role === 'user' || m.role === 'assistant').slice(-maxRecentMsgs)
+    : [];
   if (recentMsgs.length > 0) {
     lines.push('- 最近對話：');
     for (const m of recentMsgs) {

@@ -70,7 +70,7 @@ class SkillRegistryImpl {
   }
 }
 
-/** 將 SkillMeta 縮減為 slim（去除 LLM 不需要的元欄位） */
+/** 將 SkillMeta 縮減為 slim（去除 LLM 不需要的元欄位；schema 壓縮見 summarizeSchema） */
 function toSlim(m: SkillMeta): SkillMetaSlim {
   return {
     id: m.id,
@@ -80,11 +80,41 @@ function toSlim(m: SkillMeta): SkillMetaSlim {
     capabilities: m.capabilities.map((c) => ({
       action: c.action,
       description: c.description,
-      inputSchema: c.inputSchema,
-      outputSchema: c.outputSchema,
+      params: summarizeSchema(c.inputSchema),
       requiresHumanConfirm: c.requiresHumanConfirm,
     })),
   };
+}
+
+/**
+ * 將 inputSchema 壓縮為緊湊參數摘要，如：
+ *   "from: string(必填，出發城市); date: string(可選，YYYY-MM-DD)"
+ *
+ * 規劃期 LLM 只需參數名 / 型別 / 必填 / 含義；完整 JSON Schema 經縮進
+ * 序列化隨 SKILL 數量膨脹（15 個 SKILL 實測 63520 字元），撞爆雲端
+ * llm-chat 單條消息 16000 字元上限，令 LLM 規劃永久 400 而降級規則
+ * 規劃器。enum / description 對規劃決策有價值，保留進摘要。
+ */
+function summarizeSchema(schema: SkillCapability['inputSchema']): string {
+  const props = schema.properties ?? {};
+  const required = new Set(schema.required ?? []);
+  const parts: string[] = [];
+  for (const [name, p] of Object.entries(props)) {
+    const bits: string[] = [required.has(name) ? '必填' : '可選'];
+    if (Array.isArray(p.enum) && p.enum.length > 0) {
+      bits.push(`可選值 ${p.enum.map((v) => String(v)).join('|')}`);
+    }
+    if (p.description) bits.push(p.description);
+    let type = Array.isArray(p.type) ? p.type.join('|') : (p.type ?? 'unknown');
+    // 嵌套 array<object> 參數（如點單 items[]）展開一層元素鍵名——
+    // 否則必填欄位（sku/quantity 等）對 LLM 完全不可見，規劃只能盲猜元素形狀
+    const innerKeys = p.type === 'array' && p.items?.properties
+      ? Object.keys(p.items.properties).join(',')
+      : '';
+    if (innerKeys) type = `array<object{${innerKeys}}>`;
+    parts.push(`${name}: ${type}(${bits.join('，')})`);
+  }
+  return parts.join('; ');
 }
 
 /** 單例導出 */
