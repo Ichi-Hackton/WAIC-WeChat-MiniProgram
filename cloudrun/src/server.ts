@@ -36,6 +36,7 @@ import { weatherRoutes } from './skill-weather';
 import { mapRoutes } from './skill-map';
 import { ticketRoutes } from './skill-ticket';
 import { counselingRoutes } from './skill-counseling';
+import { healthRoutes } from './skill-health';
 import { paymentRoutes } from './skill-payment';
 import { mailRoutes } from './skill-mail';
 import { tripShareRoutes } from './trip-share';
@@ -69,6 +70,7 @@ const routes = new Map<string, RouteHandler>([
   ...mapRoutes,
   ...ticketRoutes,
   ...counselingRoutes,
+  ...healthRoutes,
   ...paymentRoutes,
   ...mailRoutes,
   ...tripShareRoutes,
