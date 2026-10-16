@@ -366,8 +366,11 @@ interface HomePageThis {
   succeededTaskLabels: string[];
   /** 本輪已渲染交付卡的任務 ID 集 */
   deliveredTaskIds: Set<string>;
-  /** runtime 事件退訂函數 */
+  /** runtime 事件退訂函數（undefined = 未訂閱或已退訂；見 ensureAgentSubscription 自癒說明） */
   unsubscribe?: () => void;
+  /** 內部：冪等確保 runtime 事件訂閱在位（頁面存活但訂閱失聯時自癒重訂，
+   *  覆蓋 onLoad 延後初始化 / onShow / dispatch 三個入口） */
+  ensureAgentSubscription: () => void;
   /** 延後初始化定時器 ID（onLoad 重活延後；onUnload 時取消，防止向已卸載頁面寫入 / 訂閱洩漏） */
   deferredInitTimer?: ReturnType<typeof setTimeout>;
   /** 進行中的語音識別會話（null = 閒置） */
@@ -1331,7 +1334,17 @@ function buildFliggyAiCard(data: unknown): DynamicCard | null {
 function buildProductsCard(data: unknown): GenericCard | null {
   const d = data as { products?: unknown } | undefined;
   const products = Array.isArray(d?.products) ? (d?.products as Array<Record<string, unknown>>) : [];
-  if (products.length === 0) return null;
+  // 空結果不出 null（2026-10-16 黑盒測試 D8 修訂）：null 會落入通用兜底，
+  // products 陣列被 FIELD_LABELS 白名單略過 → lines 空 → 靜默無卡，
+  // 用戶對「搜了但零結果」零感知；改為明示卡引導換關鍵詞
+  if (products.length === 0) {
+    return {
+      type: 'generic',
+      key: 'products-empty',
+      title: '商城搜尋結果',
+      lines: [{ label: '結果', value: '未搜到相關商品，可換個關鍵詞或類目試試' }],
+    };
+  }
   const lines = products.slice(0, 3).map((p, i) => ({
     label: `商品 ${i + 1}`,
     value: `${asText(p.name)} ¥${(asCents(p.priceCent) / 100).toFixed(2)}`,
@@ -1890,17 +1903,7 @@ Page({
       self.setData({ voiceReady: isVoiceAvailable() });
 
       // 訂閱 Agent runtime 事件（狀態 / 計劃 / 任務進度 → UI 即時更新）
-      const agent = getAgent();
-      if (agent) {
-        self.unsubscribe = agent.subscribe({
-          onStateChange: (s) => self.onAgentStateChange(s),
-          onPlanUpdate: (p) => self.onAgentPlanUpdate(p),
-          onTaskUpdate: (t) => self.onAgentTaskUpdate(t),
-          onCheckpointRequest: (payload, respond) => self.onAgentCheckpointRequest(payload, respond),
-        });
-      } else {
-        logError('Agent runtime 未就緒（globalData.agent 缺失），對話功能不可用');
-      }
+      self.ensureAgentSubscription();
     }, 0);
 
     // 應用內 navigateTo 攜參直達（行程頁「去預訂 / 去查看」；2026-10 審計
@@ -1921,6 +1924,11 @@ Page({
    */
   onShow(): void {
     const self = this as unknown as HomePageThis;
+    // 訂閱自癒（2026-10-16 fx 排障修復）：熱重載 / 異常卸載路徑可能出現
+    //「頁面存活但 onUnload 已跑（訂閱已退）」的分離態，此時計劃卡 /
+    // 交付卡 / 狀態列事件全部失聯（dispatch 直插的用戶訊息照常，症狀為
+    // 「分裂」）。onShow 為頁面復活的必經事件，在此兜底重訂（冪等）
+    self.ensureAgentSubscription();
     self.remindDueTrips();
     // 監控命中直達（第二梯隊·項B）：訂閱消息點擊進入。冷啟動啟動 query
     // 已由 onLoad 消費，熱啟動僅觸發 onShow 不觸發 onLoad——經
@@ -2351,6 +2359,10 @@ Page({
   /** 內部：發送訊息給 Agent */
   async dispatch(this: HomePageThis, intent: string): Promise<void> {
     if (this.data.loading || this.data.recording || this.data.transcribing) return;
+
+    // 訂閱自癒（與 onShow 同源）：dispatch 是用戶交互必經路徑，確保本輪
+    // 計劃卡 / 交付卡事件能送達本實例（注入式自動化調用亦受益）
+    this.ensureAgentSubscription();
 
     // 本輪收尾判定集歸零（task_NNN 跨輪同名，須以輪次隔離，同 activePlanId 理由）
     this.succeededTaskIds.clear();
@@ -2965,6 +2977,33 @@ Page({
       timestamp: Date.now(),
       cards: [card],
     });
+  },
+
+  /** 內部：冪等確保 runtime 事件訂閱在位（2026-10-16 fx 排障修復）
+   *
+   * 排障實錄：開發者工具熱重載後出現「頁面實例存活於頁面欄、但
+   * onUnload 已被回放（訂閱已退、deferredInitTimer 已清）」的分離態，
+   * 同時更早的殭屍實例訂閱仍在監聽——計劃卡 / 交付卡全部寫入殭屍實例，
+   * 活躍頁面只見用戶訊息與收尾文字（事件驅動與直插訊息「分裂」）。
+   * 正式環境頁面棧重建 / 後台回收重進等路徑同理可能觸發。三入口
+   * （deferredInit / onShow / dispatch）皆過此冪等檢查：已訂閱則
+   * no-op，失聯則重訂，保證「頁面活著 ⟺ 訂閱在位」不變式。
+   */
+  ensureAgentSubscription(this: HomePageThis): void {
+    if (this.unsubscribe) return;
+    const agent = getAgent();
+    if (!agent) {
+      // 僅記一次場景診斷；dispatch 內緊隨的 getAgent 判空會給用戶可讀錯誤
+      logError('Agent runtime 未就緒（globalData.agent 缺失），事件訂閱未建立');
+      return;
+    }
+    this.unsubscribe = agent.subscribe({
+      onStateChange: (s) => this.onAgentStateChange(s),
+      onPlanUpdate: (p) => this.onAgentPlanUpdate(p),
+      onTaskUpdate: (t) => this.onAgentTaskUpdate(t),
+      onCheckpointRequest: (payload, respond) => this.onAgentCheckpointRequest(payload, respond),
+    });
+    logInfo('Agent 事件訂閱已建立（自癒檢查通過）');
   },
 
   /** 追加訊息到列表並自動捲動到底部（路徑 setData 僅傳輸新訊息節點；
