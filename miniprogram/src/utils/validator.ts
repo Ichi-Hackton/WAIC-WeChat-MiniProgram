@@ -145,7 +145,9 @@ function validateAgainst(
   if (schema.type === 'object' && schema.required && typeof value === 'object' && value !== null) {
     const obj = value as Record<string, unknown>;
     for (const req of schema.required) {
-      if (!(req in obj) || obj[req] === undefined) {
+      // null 視同缺失（2026-10-16）：LLM 對無法確定的必填參數也會輸出 null
+      // 而非省略，報「缺少必填欄位」比型別錯誤語義更準，且可直接觸發追問
+      if (!(req in obj) || obj[req] === undefined || obj[req] === null) {
         errors.push({
           path: path === '' ? req : `${path}.${req}`,
           message: `缺少必填欄位 ${req}`,
@@ -173,8 +175,16 @@ function validateAgainst(
   // 物件屬性
   if (schema.type === 'object' && schema.properties && typeof value === 'object' && value !== null) {
     const obj = value as Record<string, unknown>;
+    const requiredKeys = schema.required ?? [];
     for (const [key, subSchema] of Object.entries(schema.properties)) {
-      validateAgainst(obj[key], subSchema, path === '' ? key : `${path}.${key}`, errors);
+      const v = obj[key];
+      // 可選屬性顯式 null 視為缺省（2026-10-16 實測：LLM 對未提及的
+      // 可選參數普遍輸出 null 而非省略——健康分診 age/sex 填 null 曾致
+      // 整任務誤失敗「任務參數不完整」）。SKILL 端本就按「條件滿足才
+      // 透傳」組裝請求，null 不會進入雲端 body；顯式宣告 nullable 或
+      // type 含 'null' 的欄位行為不變（本處 skip 與其豁免等價）
+      if (v === null && !requiredKeys.includes(key)) continue;
+      validateAgainst(v, subSchema, path === '' ? key : `${path}.${key}`, errors);
     }
   }
 }
