@@ -5,11 +5,15 @@
  *
  * 提供能力：
  *   - get_weather：查當前位置實時天氣（idempotent, no confirm, NOT reversible）
+ *   - get_forecast：查指定城市未來 1~7 天預報（2026-10-16；同上唯讀口徑。
+ *     高德預報窗口僅 3~4 天，雲端換 Open-Meteo 無金錀公共 API，港澳 /
+ *     全球覆蓋——「查澳門未來七天天氣」自此可達）
  *
  * 座標來源：規劃器從 ctx.userProfile.location 寫入 input（字面值）
  * ——位置由 core/context.ts 的 fetchLocation
  * 構建（wx.getLocation 座標 + 雲端逆地理編碼城市名）；定位缺失時規劃器
- * 直接追問用戶，不生成任務。
+ * 直接追問用戶，不生成任務。get_forecast 入參為城市名（雲端地理編碼
+ * 解析座標），不依賴本機定位。
  *
  * 與雲端 skill-weather.ts 的端點路徑逐字對齊；雲端不可用（負數碼 =
  * 雲基礎設施錯誤，見 coffee SKILL 說明）或 AMAP_KEY 未配置 /
@@ -22,7 +26,7 @@ import type { AgentContext } from '../../../types/context';
 import type { SkillInstance, SkillResult, SkillMeta } from '../../../types/skill';
 import { postContainer } from '../../../services/cloud';
 import type { CloudResponse } from '../../../services/cloud';
-import { formatDate } from '../../../utils/datetime';
+import { addDays, formatDate } from '../../../utils/datetime';
 
 export interface GetWeatherInput {
   /** 緯度（gcj02，規劃器從 ctx.userProfile.location 寫入） */
@@ -49,13 +53,41 @@ export interface WeatherInfo {
   source: 'amap_realtime' | 'mock';
 }
 
+export interface GetForecastInput {
+  /** 城市名（規劃器從用戶意圖提取，如「澳門」；雲端地理編碼解析座標） */
+  city: string;
+  /** 預報天數 1~7（缺省 7） */
+  days?: number;
+}
+
+/** 單日預報（與雲端 ForecastCast 契約同構） */
+export interface ForecastDay {
+  /** 預報日（YYYY-MM-DD，首日為當天） */
+  date: string;
+  dayweather: string;
+  nightweather: string;
+  /** 白天最高溫（攝氏度，字串形態） */
+  daytemp: string;
+  /** 夜間最低溫 */
+  nighttemp: string;
+}
+
+export interface ForecastInfo {
+  city: string;
+  days: ForecastDay[];
+  /** 數據源標識（open-meteo / mock），卡片以此區分即時 / 模擬 */
+  source: 'open-meteo' | 'mock';
+}
+
 export const meta = {
   id: 'skill.weather.query',
   name: '天氣查詢',
   description:
-    '【能做】查詢用戶當前位置的實時天氣（get_weather：溫度、濕度、天氣現象、風向風力）。' +
-    '【不能做】不能查指定城市的天氣（僅支援當前定位）、不能查未來天氣預報。' +
-    '【觸發時機】用戶提到「天氣 / 現在幾度 / 濕度 / 會不會下雨」等。',
+    '【能做】查詢用戶當前位置的實時天氣（get_weather：溫度、濕度、天氣現象、風向風力）；' +
+    '查詢指定城市未來 1~7 天天氣預報（get_forecast：每日天氣現象與最高 / 最低溫，' +
+    '入參 city 城市名 + days 天數 1~7，如「澳門未來七天天氣」）。' +
+    '【不能做】實時天氣僅支援當前定位（不能查指定城市實況）；預報窗口最長 7 天。' +
+    '【觸發時機】用戶提到「天氣 / 現在幾度 / 濕度 / 會不會下雨 / 天氣預報 / 未來幾天天氣」等。',
   version: '1.0.0',
   owner: 'wx-weather-mock',
   tags: ['天氣', '生活'],
@@ -89,6 +121,44 @@ export const meta = {
       reversible: false,
       requiresHumanConfirm: false,
       estimatedLatencyMs: 1000,
+    },
+    {
+      action: 'get_forecast',
+      description: '按城市名查未來 1~7 天天氣預報（Open-Meteo 日級；含港澳 / 全球城市）',
+      inputSchema: {
+        type: 'object',
+        required: ['city'],
+        properties: {
+          city: { type: 'string', description: '城市名（如「澳門」；雲端地理編碼解析座標，不依賴本機定位）' },
+          days: { type: 'integer', description: '預報天數 1~7（缺省 7）' },
+        },
+      },
+      outputSchema: {
+        type: 'object',
+        required: ['city', 'days'],
+        properties: {
+          city: { type: 'string', description: '城市名（規範名）' },
+          days: {
+            type: 'array',
+            description: '未來 N 天（首日為當天）',
+            items: {
+              type: 'object',
+              properties: {
+                date: { type: 'string', description: '預報日（YYYY-MM-DD）' },
+                dayweather: { type: 'string', description: '白天天氣現象' },
+                nightweather: { type: 'string', description: '夜間天氣現象' },
+                daytemp: { type: 'string', description: '白天最高溫（℃）' },
+                nighttemp: { type: 'string', description: '夜間最低溫（℃）' },
+              },
+            },
+          },
+          source: { type: 'string', description: 'open-meteo / mock' },
+        },
+      },
+      idempotent: true,
+      reversible: false,
+      requiresHumanConfirm: false,
+      estimatedLatencyMs: 2000,
     },
   ],
 } as unknown as SkillMeta;
@@ -140,9 +210,47 @@ function mockWeather(input: GetWeatherInput, ctx: AgentContext): WeatherInfo {
   };
 }
 
+/** 模擬預報（確定性：seed = 起始日期 + 城市，同日同城市演示數據穩定） */
+function mockForecast(input: GetForecastInput): ForecastInfo {
+  const n = Math.min(Math.max(Math.round(input.days ?? 7), 1), 7);
+  const now = new Date();
+  const seed = hashStr(`${formatDate(now)}|${input.city}`);
+  const days: ForecastDay[] = Array.from({ length: n }, (_, i) => {
+    const s = hashStr(`${seed}|${i}`);
+    const wx = MOCK_CONDITIONS[s % MOCK_CONDITIONS.length];
+    return {
+      date: formatDate(addDays(now, i)),
+      dayweather: wx,
+      nightweather: wx,
+      daytemp: String(16 + ((s >>> 3) % 12)),
+      nighttemp: String(8 + ((s >>> 6) % 10)),
+    };
+  });
+  return { city: input.city, days, source: 'mock' };
+}
+
 export const instance: SkillInstance = {
   meta,
   async invoke(action, input, ctx): Promise<SkillResult> {
+    if (action === 'get_forecast') {
+      // 防禦性窄化：入參已過 adapter schema 校驗（required city），此處兒底
+      const typed = input as Partial<GetForecastInput>;
+      if (typeof typed.city !== 'string' || !typed.city.trim()) {
+        return {
+          success: false,
+          error: {
+            code: 'FORECAST_CITY_MISSING',
+            message: '缺少城市名，請說明想查哪個城市的天氣預報',
+            retryable: false,
+          },
+        };
+      }
+      return invokeGetForecast(
+        ctx.globals.cloudEnv as string,
+        { city: typed.city.trim(), days: typeof typed.days === 'number' ? typed.days : undefined },
+        ctx,
+      );
+    }
     if (action !== 'get_weather') {
       return {
         success: false,
@@ -186,5 +294,28 @@ async function invokeGetWeather(
   return {
     success: false,
     error: { code: 'WEATHER_QUERY_FAILED', message: res.message ?? '天氣查詢失敗', retryable: true },
+  };
+}
+
+async function invokeGetForecast(
+  env: string,
+  input: GetForecastInput,
+  ctx: AgentContext,
+): Promise<SkillResult<ForecastInfo>> {
+  const res: CloudResponse<ForecastInfo> = await postContainer<ForecastInfo>(
+    env,
+    '/api/skill/skill.weather.query/get_forecast',
+    input,
+    { sessionId: ctx.sessionId },
+  );
+  if (res.code === 0 && res.data) return { success: true, data: res.data };
+  // 降級口徑與 get_weather 一致（唯讀查詢無副作用，mock 標識「模擬數據」
+  // 明示，保證本地演示與自動化驗證鏈路完整）
+  if (res.code < 0 || res.code === 503) {
+    return { success: true, data: mockForecast(input) };
+  }
+  return {
+    success: false,
+    error: { code: 'FORECAST_QUERY_FAILED', message: res.message ?? '天氣預報查詢失敗', retryable: true },
   };
 }
