@@ -6,9 +6,9 @@
   "scripts": {
     "type-check": "tsc --noEmit",
     "build": "tsc --noEmit",
-    "test:dynamic": "tsc --noEmit && tsc miniprogram/src/skills/dynamic.ts miniprogram/src/llm/parser.ts miniprogram/src/interaction/dynamic-card.ts --ignoreConfig --module commonjs --target es2020 --esModuleInterop --skipLibCheck --outDir dist-test && node --test test/dynamic-sync.test.mjs",
-    "test:parser": "tsc --noEmit && tsc miniprogram/src/llm/parser.ts --ignoreConfig --module commonjs --target es2020 --esModuleInterop --skipLibCheck --outDir dist-test && node --test test/parser.test.mjs",
-    "test:health": "tsc --noEmit && tsc miniprogram/src/llm/rule-planner.ts --ignoreConfig --module commonjs --target es2020 --esModuleInterop --skipLibCheck --outDir dist-test && node --test test/rule-planner-health.test.mjs",
+    "test:dynamic": "tsc --noEmit && tsc miniprogram/src/skills/dynamic.ts miniprogram/src/llm/parser.ts miniprogram/src/interaction/dynamic-card.ts --ignoreConfig --module commonjs --target es2020 --esModuleInterop --skipLibCheck --rootDir miniprogram/src --outDir dist-test && node --test test/dynamic-sync.test.mjs",
+    "test:parser": "tsc --noEmit && tsc miniprogram/src/llm/parser.ts --ignoreConfig --module commonjs --target es2020 --esModuleInterop --skipLibCheck --rootDir miniprogram/src --outDir dist-test && node --test test/parser.test.mjs",
+    "test:health": "tsc --noEmit && tsc miniprogram/src/llm/rule-planner.ts --ignoreConfig --module commonjs --target es2020 --esModuleInterop --skipLibCheck --rootDir miniprogram/src --outDir dist-test && node --test test/rule-planner-health.test.mjs",
     "test:validator": "tsc --noEmit && tsc miniprogram/src/utils/validator.ts --ignoreConfig --module commonjs --target es2020 --esModuleInterop --skipLibCheck --rootDir miniprogram/src --outDir dist-test && node --test test/validator.test.mjs",
     "test": "npm run test:dynamic && npm run test:parser && npm run test:health && npm run test:validator"
   },

@@ -9,6 +9,8 @@
  *   2. extractJson：尾巴文字容忍（貪婪正則必炸場景）、fenced 包裹、
  *      重複輸出取首個、回退語義保持
  *   3. 事故重建端到端：extractJson → validatePlannerOutput → 缺口保留
+ *   4. dependsOn 寬容回填：單任務 Plan 省略/null 視為無依賴（實測：
+ *      「查明天上海天氣」省略 dependsOn 被否決）；存在但非陣列仍攔截
  */
 
 import { test } from 'node:test';
@@ -25,7 +27,7 @@ async function load(rel) {
   return m.default ?? m;
 }
 
-const { extractJson, extractFirstJsonObject, validatePlannerOutput, LLMParserError } = await load('llm/parser.js');
+const { extractJson, extractFirstJsonObject, validatePlannerOutput, toPlan, LLMParserError } = await load('llm/parser.js');
 
 /* ============ 1. extractFirstJsonObject 純函數 ============ */
 
@@ -81,4 +83,41 @@ test('無 JSON 結構：拋 LLMParserError', () => {
 
 test('徹底損壞（字串未閉合且無配對）：回退貪婪正則後仍拋 LLMParserError', () => {
   assert.throws(() => extractJson('{"a":"未閉合}但貪婪有配對}'), LLMParserError);
+});
+
+/* ============ 3. dependsOn 寬容回填 ============ */
+
+test('事故重建：單任務 Plan 省略 dependsOn（修復前被「缺少 dependsOn[]」否決）', () => {
+  // 2026-10-16 實測 LLM 輸出原文形態：task 帶 id/inputBindings 但無 dependsOn
+  const raw =
+    '{"intent":"查一下明天上海的天气","tasks":[' +
+    '{"id":"task_001","skillId":"skill.weather.qweather","action":"get_forecast",' +
+    '"input":{"city":"上海","date":"2026-10-17"},"inputBindings":{},' +
+    '"summary":"查詢上海明天天氣預報"}],"message":""}';
+  const out = validatePlannerOutput(extractJson(raw));
+  assert.deepEqual(out.tasks[0].dependsOn, []);
+  // 端到端：toPlan 產出無依賴任務，可直接並行調度
+  const plan = toPlan(out, '查一下明天上海的天气', 'plan_1');
+  assert.equal(plan.tasks.length, 1);
+  assert.deepEqual(plan.tasks[0].dependsOn, []);
+  assert.equal(plan.tasks[0].id, 'task_001');
+});
+
+test('dependsOn 為 null 同樣回填 []；多任務混合場景兼容', () => {
+  const raw = {
+    tasks: [
+      { skillId: 'skill.a', action: 'x', input: {}, dependsOn: null },
+      { skillId: 'skill.b', action: 'y', input: {}, dependsOn: ['task_001'] },
+    ],
+  };
+  const out = validatePlannerOutput(raw);
+  assert.deepEqual(out.tasks[0].dependsOn, []);
+  assert.deepEqual(out.tasks[1].dependsOn, ['task_001']);
+});
+
+test('dependsOn 存在但非陣列：仍屬畸形攔截（靜默清空會丟依賴令任務提前並行）', () => {
+  const raw = {
+    tasks: [{ skillId: 'skill.train.12306', action: 'search_train', input: { from: '北京' }, dependsOn: 'task_000' }],
+  };
+  assert.throws(() => validatePlannerOutput(raw), LLMParserError);
 });

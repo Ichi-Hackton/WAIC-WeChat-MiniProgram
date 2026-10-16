@@ -186,8 +186,16 @@ export function validatePlannerOutput(raw: unknown): PlannerLLMOutput {
     if (typeof t.input !== 'object' || t.input === null) {
       throw new LLMParserError(`task[${i}] 缺少 input`);
     }
-    if (!Array.isArray(t.dependsOn)) {
-      throw new LLMParserError(`task[${i}] 缺少 dependsOn[]`);
+    // dependsOn 為可選欄位：LLM 對無依賴任務常省略空陣列（單任務 Plan
+    // 高頻，prompt 範例帶 "dependsOn":[] 也無法保證），缺失/null 視為無
+    // 依賴回填 []——規範 § 8.3「無依賴的任務可並行」的省略形態，與 toPlan
+    // 的 ?? [] 寬容對齊（實測復現：「查明天上海天氣」單任務 Plan 省略
+    // dependsOn 被「缺少 dependsOn[]」否決，意圖完全可規劃卻直接失敗）；
+    // 存在但非陣列仍屬畸形——靜默清空會丟失依賴令任務提前並行執行，維持攔截
+    if (t.dependsOn === undefined || t.dependsOn === null) {
+      t.dependsOn = [];
+    } else if (!Array.isArray(t.dependsOn)) {
+      throw new LLMParserError(`task[${i}] dependsOn 必須為字串陣列`);
     }
     assertNoPlaceholder(o.tasks[i], i);
   }
